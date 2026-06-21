@@ -17,6 +17,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 from .cache import BlockCache
+from .chunk import split_ssml_for_polly
+from .ffmpeg import concat_mp3_bytes
 from .manifest import Block, Manifest
 
 REGION = "eu-west-2"
@@ -58,14 +60,14 @@ def _is_throttle(exc: Exception) -> bool:
     return code in ("ThrottlingException", "TooManyRequestsException")
 
 
-def _synthesise_one(client, manifest: Manifest, block: Block) -> bytes:
-    """Call Polly for one block, retrying throttles (backoff) and one hard error."""
+def _polly_call(client, manifest: Manifest, ssml: str, block_index: int) -> bytes:
+    """One Polly SynthesizeSpeech call, retrying throttles (backoff) and one error."""
     throttle_tries = 0
     hard_tries = 0
     while True:
         try:
             resp = client.synthesize_speech(
-                Text=block.ssml,
+                Text=ssml,
                 TextType="ssml",
                 OutputFormat="mp3",
                 VoiceId=manifest.voice,
@@ -77,7 +79,7 @@ def _synthesise_one(client, manifest: Manifest, block: Block) -> bytes:
                 throttle_tries += 1
                 if throttle_tries > _MAX_THROTTLE_RETRIES:
                     raise SynthesisError(
-                        f"block {block.index}: still throttled after "
+                        f"block {block_index}: still throttled after "
                         f"{_MAX_THROTTLE_RETRIES} retries"
                     ) from e
                 delay = min(_BACKOFF_CAP, _BACKOFF_BASE ** throttle_tries)
@@ -85,9 +87,19 @@ def _synthesise_one(client, manifest: Manifest, block: Block) -> bytes:
                 continue
             hard_tries += 1
             if hard_tries > _SYNTH_RETRIES:
-                raise SynthesisError(f"block {block.index}: {e}") from e
+                raise SynthesisError(f"block {block_index}: {e}") from e
             # one quick retry for transient/model errors
             time.sleep(1.0)
+
+
+def _synthesise_one(client, manifest: Manifest, block: Block) -> bytes:
+    """Synthesise one block, splitting over-long SSML across calls and rejoining."""
+    try:
+        chunks = split_ssml_for_polly(block.ssml)
+    except ValueError as e:
+        raise SynthesisError(f"block {block.index}: {e}") from e
+    parts = [_polly_call(client, manifest, c, block.index) for c in chunks]
+    return concat_mp3_bytes(parts)
 
 
 def synthesise(
