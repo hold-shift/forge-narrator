@@ -1,0 +1,14 @@
+SSML_FINDINGS.md
+out/
+cache/
+*.mp3
+*.marks.json
+.venv/
+.venv-*/
+__pycache__/
+*.pyc
+.DS_Store
+
+# keep POC fixtures (they're small + useful test data)
+!poc/*.mp3
+!poc/*.marks.mlx.json

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WhisperX Sync Checker</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --khaki: #6b6b3a; --khaki-mid: #b5b48a; --rule: #e0dfd8;
+    --ink: #111110; --ink-secondary: #444440; --ink-tertiary: #888880;
+    --highlight: #fff0a0; --highlight-current: #ffe033;
+  }
+  body { font-family: Georgia, serif; color: var(--ink); font-size: 20px; line-height: 1.9; background: #fff; }
+  .bar { position: sticky; top: 0; background: #fff; border-bottom: 2px solid var(--khaki); padding: 1rem 1.5rem; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; box-shadow: 0 2px 8px rgba(0,0,0,.05); z-index: 10; }
+  .bar h2 { font-family: system-ui, sans-serif; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--khaki); font-weight: 600; }
+  audio { height: 38px; }
+  .status { font-family: system-ui, sans-serif; font-size: 12px; color: var(--ink-tertiary); flex-basis: 100%; }
+  .page { max-width: 680px; margin: 0 auto; padding: 2.5rem 1.5rem 8rem; }
+  .note { font-family: system-ui, sans-serif; font-size: 13px; color: var(--ink-tertiary); background: #f8f8f5; border-left: 3px solid var(--khaki-mid); padding: .75rem 1rem; margin-bottom: 2rem; line-height: 1.6; }
+  .w { border-radius: 2px; transition: background .08s; cursor: pointer; }
+  .w.spoken { background: var(--highlight); }
+  .w.current { background: var(--highlight-current); }
+  .err { color: #a33; font-family: system-ui, sans-serif; font-size: 14px; padding: 1rem; }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <h2>WhisperX Sync Checker</h2>
+    <audio id="audio" controls src="speech_20260621132525611.mp3"></audio>
+    <label style="font-family:system-ui,sans-serif;font-size:12px;color:var(--ink-tertiary);display:flex;align-items:center;gap:6px">
+      Speed
+      <input type="range" id="speed" min="0.75" max="1.75" step="0.05" value="1.25" style="accent-color:var(--khaki);width:80px">
+      <span id="speedLabel" style="min-width:34px">1.25x</span>
+    </label>
+    <div class="status" id="status">Loading marks...</div>
+  </div>
+
+  <div class="page">
+    <div class="note">
+      Press play and watch whether the amber highlight lands on the word being
+      spoken, scrolling to follow. Click any word to jump the audio there.
+    </div>
+    <div id="text"></div>
+  </div>
+
+<script>
+const audio = document.getElementById('audio');
+const statusEl = document.getElementById('status');
+const textEl = document.getElementById('text');
+let marks = [], spans = [], lastIdx = -1;
+
+async function load() {
+  try {
+    const res = await fetch('sample.marks.json');
+    if (!res.ok) throw new Error('marks file not found (HTTP ' + res.status + ')');
+    marks = await res.json();
+  } catch (e) {
+    textEl.innerHTML = '<div class="err">Could not load sample.marks.json - ' + e.message + '</div>';
+    statusEl.textContent = 'Error';
+    return;
+  }
+  textEl.innerHTML = '';
+  marks.forEach((m, i) => {
+    const span = document.createElement('span');
+    span.className = 'w';
+    span.textContent = m.word;
+    span.onclick = () => {
+      audio.currentTime = m.start + 0.01;
+      const wasPlaying = !audio.paused;
+      if (wasPlaying || audio.readyState >= 2) {
+        audio.play().catch(() => {});
+      }
+      // Immediately reflect the jump visually
+      lastIdx = -1;
+    };
+    textEl.appendChild(span);
+    textEl.appendChild(document.createTextNode(' '));
+    spans.push(span);
+  });
+  statusEl.textContent = marks.length + ' words loaded - press play';
+}
+
+audio.addEventListener('timeupdate', updateHighlight);
+audio.addEventListener('seeked', updateHighlight);
+
+function updateHighlight() {
+  const t = audio.currentTime;
+  let idx = -1;
+  for (let i = 0; i < marks.length; i++) {
+    if (t >= marks[i].start && t <= marks[i].end) { idx = i; break; }
+    if (t < marks[i].start) { idx = i - 1; break; }
+  }
+  if (idx === lastIdx) return;
+  lastIdx = idx;
+  spans.forEach((s, i) => {
+    s.classList.remove('current', 'spoken');
+    if (i < idx) s.classList.add('spoken');
+    else if (i === idx) s.classList.add('current');
+  });
+  if (idx >= 0 && spans[idx]) {
+    spans[idx].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    statusEl.textContent = `Word ${idx + 1} / ${marks.length}: "${marks[idx].word}" @ ${t.toFixed(2)}s`;
+  }
+}
+
+load();
+
+// Speed control — default 1.25x applied on load
+const speed = document.getElementById('speed');
+const speedLabel = document.getElementById('speedLabel');
+function applySpeed() {
+  audio.playbackRate = parseFloat(speed.value);
+  speedLabel.textContent = parseFloat(speed.value).toFixed(2) + 'x';
+}
+speed.addEventListener('input', applySpeed);
+audio.addEventListener('loadedmetadata', applySpeed);
+applySpeed();
+</script>
+</body>
+</html>
