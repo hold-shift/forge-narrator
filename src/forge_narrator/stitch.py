@@ -73,10 +73,14 @@ def stitch(manifest: Manifest, cache: BlockCache, out_mp3: Path) -> list[BlockOf
         concat_list.write_text(
             "".join(f"file '{w.as_posix()}'\n" for w in wavs), encoding="utf-8"
         )
+        # CONSTANT bitrate (not VBR -q:a). The output is a long, seekable narration
+        # file; browsers seek MP3 by assuming constant bitrate, so VBR makes
+        # `audio.currentTime = X` land at the wrong byte (error grows with
+        # position). CBR keeps seeks/scrubbing sample-accurate.
         run([
             ffmpeg, "-nostdin", "-y",
             "-f", "concat", "-safe", "0", "-i", str(concat_list),
-            "-c:a", "libmp3lame", "-q:a", "2", "-ar", str(_SR), "-ac", "1",
+            "-c:a", "libmp3lame", "-b:a", "96k", "-ar", str(_SR), "-ac", "1",
             str(out_mp3),
         ])
 
