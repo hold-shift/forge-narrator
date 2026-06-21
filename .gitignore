@@ -9,6 +9,11 @@ __pycache__/
 *.pyc
 .DS_Store
 
+# build artifacts
+*.egg-info/
+build/
+dist/
+
 # keep POC fixtures (they're small + useful test data)
 !poc/*.mp3
 !poc/*.marks.mlx.json

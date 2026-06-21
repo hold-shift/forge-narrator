@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "slug": "junior-sample",
+  "title": "Junior (sample)",
+  "voice": "Brian",
+  "engine": "generative",
+  "blocks": [
+    {
+      "index": 0,
+      "type": "heading",
+      "text": "The boy I once knew but now remember",
+      "ssml": "<speak><break time='700ms'/><prosody rate='95%'>The boy I once knew but now remember</prosody><break time='400ms'/></speak>",
+      "hash": "d02fcabacd181813d361c3d0e95b8b872b546ebf7a29017d3593edb00eaa8ebd"
+    },
+    {
+      "index": 1,
+      "type": "paragraph",
+      "text": "Junior hurries down the hill from the convent towards the railway yard. It is becoming cold and dew is forming on the ground. There will be a frost in the morning. It is dark already and not yet six o'clock.",
+      "ssml": "<speak>Junior hurries down the hill from the convent towards the railway yard. It is becoming cold and dew is forming on the ground. There will be a frost in the morning. It is dark already and not yet six o'clock.<break time='500ms'/></speak>",
+      "hash": "d55a96d6383c0ccda2da78edbc41876b6383fb1b06a622ee028b87ecc54ae8d0"
+    },
+    {
+      "index": 2,
+      "type": "paragraph",
+      "text": "Mum will have something nice for tea although Junior is not all that fond of food. The fire in the stove though will be nice and after tea sitting around the stove in warm pyjamas with the oven open is best.",
+      "ssml": "<speak>Mum will have something nice for tea although Junior is not all that fond of food. The fire in the stove though will be nice and after tea sitting around the stove in warm pyjamas with the oven open is best.<break time='500ms'/></speak>",
+      "hash": "7749130752b9c0a203a07ff0f863c368fe224a6d7a57f545fdb68a95270deffa"
+    },
+    {
+      "index": 3,
+      "type": "paragraph",
+      "text": "The name Junior came about because his father was also Robert, and to avoid confusion the boy had been called Junior from infancy. It followed him through the primary school roll books.",
+      "ssml": "<speak>The name Junior came about because his father was also Robert, and to avoid confusion the boy had been called Junior from infancy. It followed him through the primary school roll books.<break time='500ms'/></speak>",
+      "hash": "6aac0d7e1c9e27666f8988ed47d2c2ac3fb016472e3983f37765f18693e09019"
+    }
+  ]
+}
