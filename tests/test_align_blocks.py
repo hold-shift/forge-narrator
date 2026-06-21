@@ -32,15 +32,16 @@ def _install_fake_whispermlx(monkeypatch):
         return ("model", {"meta": True})
 
     def align(segments, model, metadata, audio, device, return_char_alignments):
+        # Mimic the real whispermlx: RE-SEGMENT each input block into several
+        # output segments (here, one per word) at absolute times. The flattener
+        # must not assume output-segment ↔ input-block correspondence.
         out_segments = []
         for seg in segments:
             words = seg["text"].split()
             span = (seg["end"] - seg["start"]) / max(1, len(words))
-            wlist = []
             for i, w in enumerate(words):
                 s = seg["start"] + i * span
-                wlist.append({"word": w, "start": s, "end": s + span * 0.9})
-            out_segments.append({"words": wlist})
+                out_segments.append({"words": [{"word": w, "start": s, "end": s + span * 0.9}]})
         return {"segments": out_segments}
 
     fake.load_align_model = load_align_model
