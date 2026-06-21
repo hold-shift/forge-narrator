@@ -5,29 +5,30 @@ This module unzips (or reads a bare ``.json``), validates it, and exposes typed
 ``Manifest`` / ``Block`` objects to the rest of the pipeline. It makes NO network
 calls — parsing is verified first (build order step 2).
 
-Manifest schema (version 1)::
+Manifest schema (as emitted by NotebookForge)::
 
     {
-      "version": 1,
-      "slug": "junior",                  # output folder name: out/{slug}/
-      "title": "Junior",                 # human label (optional)
+      "document_slug": "1934-1945_junior", # output folder name: out/{slug}/
+      "title": "Junior",                   # human label (optional)
       "voice": "Brian",
       "engine": "generative",
       "blocks": [
         {
           "index": 0,
-          "type": "heading",             # "heading" | "paragraph"
-          "text": "The boy I once knew", # plain text (transcript + render source)
-          "ssml": "<speak>...</speak>",  # exact SSML to send to Polly
-          "hash": "<sha256 hex>"         # sha256(ssml, voice, engine) — cache key
+          "type": "heading",               # "heading" | "paragraph"
+          "ssml": "<speak>...</speak>",     # exact SSML to send to Polly
+          "hash": "<sha256 hex>"           # sha256(ssml + voice + engine) — cache key
         },
         ...
       ]
     }
 
-Only ``heading`` and ``paragraph`` blocks appear here; NotebookForge has already
-stripped images, doc groups, nav, and (v1) footnotes per the Overview's
-"What is narratable" table. The generator stays dumb: it speaks what it's given.
+NotebookForge exports SSML only — no plain ``text`` and no ``version`` field. The
+generator derives each block's readable text from its SSML (see ``ssml.py``); both
+are tolerated if present (``slug``/``document_slug``, an optional ``text``). Only
+``heading`` and ``paragraph`` blocks appear; images, doc groups, nav and (v1)
+footnotes are already stripped per the Overview's "What is narratable" table. The
+generator stays dumb: it speaks what it's given.
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .hashing import block_hash
+from .ssml import ssml_to_text
 
 MANIFEST_NAME = "manifest.json"
 SUPPORTED_VERSION = 1
@@ -139,16 +141,18 @@ def load_manifest(path: str | Path, *, verify_hashes: bool = True) -> Manifest:
     if not isinstance(data, dict):
         raise ManifestError(f"{path.name}: top level must be a JSON object")
 
-    version = _require(data, "version", path.name)
+    # version is optional (NotebookForge does not emit it). If present, enforce it.
+    version = data.get("version", SUPPORTED_VERSION)
     if version != SUPPORTED_VERSION:
         raise ManifestError(
             f"{path.name}: unsupported manifest version {version!r} "
             f"(this tool supports version {SUPPORTED_VERSION})"
         )
 
-    slug = str(_require(data, "slug", path.name)).strip()
+    # NotebookForge emits 'document_slug'; tolerate 'slug' too.
+    slug = str(data.get("document_slug") or data.get("slug") or "").strip()
     if not slug:
-        raise ManifestError(f"{path.name}: 'slug' is empty")
+        raise ManifestError(f"{path.name}: missing 'document_slug' (or 'slug')")
     voice = str(_require(data, "voice", path.name))
     engine = str(_require(data, "engine", path.name))
     title = str(data.get("title", slug))
@@ -167,9 +171,13 @@ def load_manifest(path: str | Path, *, verify_hashes: bool = True) -> Manifest:
             raise ManifestError(
                 f"{where}: type {btype!r} not in {BLOCK_TYPES}"
             )
-        text = str(_require(rb, "text", where))
         ssml = str(_require(rb, "ssml", where))
         bhash = str(_require(rb, "hash", where))
+        # NotebookForge ships SSML only; derive readable text from it unless the
+        # manifest provides explicit text (e.g. test fixtures).
+        text = str(rb["text"]) if "text" in rb else ssml_to_text(ssml)
+        if not text:
+            raise ManifestError(f"{where}: empty text (SSML had no spoken content)")
         # 'index' is informational; we trust positional order as authoritative
         # (the sacred word-ordering invariant). Flag a mismatch early as a smell.
         declared_index = rb.get("index", i)

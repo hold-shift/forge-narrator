@@ -15,6 +15,12 @@ def test_voice_and_engine_change_hash():
     assert block_hash("<speak>HI</speak>", "Brian", "generative") != base
 
 
-def test_separator_prevents_field_ambiguity():
-    # Without a separator these would collide.
-    assert block_hash("ab", "c", "d") != block_hash("a", "bc", "d")
+def test_recipe_matches_real_notebookforge_export():
+    # Regression lock: this (ssml, voice, engine) → hash triple was taken verbatim
+    # from a real 1934-1945_junior.manifest.zip export. The recipe is plain
+    # concatenation, no separator; if this breaks, the cache key diverged.
+    ssml = ('<speak><break time="700ms"/><prosody rate="95%">Prologue</prosody>'
+            '<break time="400ms"/></speak>')
+    assert block_hash(ssml, "Brian", "generative") == (
+        "6cbb94ac1c199d7663935de47b10247d8793911e09a59a377e15568ed9745155"
+    )

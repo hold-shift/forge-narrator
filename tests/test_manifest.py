@@ -19,6 +19,28 @@ def _write_zip(tmp_path, data, name="manifest.zip", member="manifest.json"):
     return p
 
 
+def test_real_format_document_slug_and_derived_text(tmp_path):
+    """NotebookForge format: document_slug, no version, SSML-only blocks."""
+    from forge_narrator.hashing import block_hash
+
+    ssml = ('<speak><break time="700ms"/><prosody rate="95%">Prologue</prosody>'
+            '<break time="400ms"/></speak>')
+    data = {
+        "document_slug": "1934-1945_junior",
+        "title": "Junior",
+        "voice": "Brian",
+        "engine": "generative",
+        "blocks": [
+            {"index": 0, "type": "heading", "ssml": ssml,
+             "hash": block_hash(ssml, "Brian", "generative")},
+        ],
+    }
+    m = load_manifest(_write_json(tmp_path, data))
+    assert m.slug == "1934-1945_junior"
+    assert m.blocks[0].text == "Prologue"          # derived from SSML
+    assert m.transcript == "Prologue"
+
+
 def test_load_from_json(tmp_path, manifest_dict):
     m = load_manifest(_write_json(tmp_path, manifest_dict))
     assert m.slug == "test-doc"

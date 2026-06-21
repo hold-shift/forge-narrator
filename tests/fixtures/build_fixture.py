@@ -63,18 +63,18 @@ def build_manifest() -> dict:
     for para in PARAGRAPHS:
         specs.append(("paragraph", para, paragraph_ssml(para)))
 
-    for i, (btype, text, ssml) in enumerate(specs):
+    for i, (btype, _text, ssml) in enumerate(specs):
+        # Mirror the real NotebookForge export: SSML only, no plain text. The
+        # generator derives readable text from the SSML.
         blocks.append({
             "index": i,
             "type": btype,
-            "text": text,
             "ssml": ssml,
             "hash": block_hash(ssml, VOICE, ENGINE),
         })
 
     return {
-        "version": 1,
-        "slug": SLUG,
+        "document_slug": SLUG,
         "title": TITLE,
         "voice": VOICE,
         "engine": ENGINE,
