@@ -168,6 +168,25 @@ def create_app(*, out_root: str, cache_dir: str, char_cap: int | None) -> FastAP
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
+    @app.post("/api/publish/{run_id}")
+    def publish(run_id: str) -> JSONResponse:
+        """Upload the run's out/{slug}/ to R2 via the shared CLI uploader.
+
+        Reuses upload.upload_slug — no upload logic is duplicated here. The
+        Cloudflare token stays in wrangler (server-side); only the public base URL
+        is returned to the browser. Sync def → Starlette runs it in a threadpool,
+        so the (blocking) wrangler upload doesn't stall the event loop.
+        """
+        run = _run(run_id)
+        from ..upload import UploadError, upload_slug
+        try:
+            base_url = upload_slug(
+                run.slug, out_root=app.state.out_root, echo=lambda *a: None
+            )
+        except UploadError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+        return JSONResponse({"base_url": base_url})
+
     @app.get("/preview/{slug}/")
     def preview_index(slug: str) -> HTMLResponse:
         return HTMLResponse(_player_html())

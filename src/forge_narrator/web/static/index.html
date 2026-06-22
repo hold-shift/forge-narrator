@@ -112,12 +112,17 @@
       <div class="grid" id="dn-grid"></div>
       <div class="files" id="dn-files"></div>
       <div class="reminder">
-        <b>Next:</b> upload these three files to S3 and paste the base URL into
-        NotebookForge's Narration panel.
+        <b>Next:</b> preview to check, then <b>Publish to R2</b> and paste the base
+        URL into NotebookForge's Narration panel.
       </div>
       <div class="row">
-        <button class="go" id="btn-preview">Preview in player</button>
+        <button class="go" id="btn-publish">Publish to R2</button>
+        <button class="ghost" id="btn-preview">Preview in player</button>
         <a class="restart" id="dn-reset">convert another</a>
+      </div>
+      <div id="publish-box" class="hidden" style="margin-top:1.1rem">
+        <div class="files" id="publish-url"></div>
+        <div class="muted" id="publish-hint" style="margin-top:.4rem"></div>
       </div>
     </section>
   </div>
@@ -274,7 +279,45 @@ function finish(s) {
     <div class="k">Cost</div><div class="v em">$${(s.cost_usd ?? 0).toFixed(2)}</div>`;
   $('dn-files').innerHTML = [s.mp3, s.marks, s.blocks].map(p => `<div>${p}</div>`).join('');
   $('btn-preview').onclick = () => window.open('/preview/' + encodeURIComponent(s.slug) + '/', '_blank');
+  // reset publish UI for this run
+  const pub = $('btn-publish');
+  pub.disabled = false; pub.textContent = 'Publish to R2';
+  pub.onclick = publish;
+  $('publish-box').classList.add('hidden');
+  $('publish-url').innerHTML = ''; $('publish-hint').textContent = '';
   show('s-done');
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+async function publish() {
+  const btn = $('btn-publish');
+  btn.disabled = true; btn.textContent = 'Publishing…';
+  $('publish-box').classList.remove('hidden');
+  $('publish-url').innerHTML = '<span class="muted">uploading to R2 via wrangler…</span>';
+  $('publish-hint').textContent = '';
+  try {
+    const r = await fetch('/api/publish/' + runId, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
+    btn.textContent = 'Published ✓';
+    $('publish-url').innerHTML =
+      '<b>Audio base URL:</b> <span id="pub-url"></span> ' +
+      '<button class="ghost" id="btn-copy">copy</button>';
+    $('pub-url').textContent = d.base_url;
+    $('btn-copy').onclick = () => navigator.clipboard.writeText(d.base_url);
+    $('publish-hint').textContent =
+      'Paste this into NotebookForge → the document\'s Narration panel → "Audio base URL".';
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Publish to R2';
+    $('publish-url').innerHTML =
+      '<span style="color:var(--err)">Publish failed: ' + escapeHtml(e.message) + '</span>';
+    $('publish-hint').textContent =
+      'Check `wrangler login` and the one-time R2 setup, then try again.';
+  }
 }
 </script>
 </body>

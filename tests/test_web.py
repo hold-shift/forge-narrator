@@ -95,3 +95,39 @@ def test_cost_gate_blocks_generate_over_cap(tmp_path):
 def test_inspect_unknown_run_404(tmp_path):
     c = _client(tmp_path)
     assert c.get("/api/inspect/nope").status_code == 404
+
+
+def _uploaded_run(client):
+    return client.post(
+        "/api/upload", files={"file": ("m.zip", _manifest_zip_bytes(), "application/zip")}
+    ).json()["run_id"]
+
+
+def test_publish_returns_base_url(tmp_path, monkeypatch):
+    from forge_narrator import upload as up
+    c = _client(tmp_path)
+    run_id = _uploaded_run(c)
+    # reuse the shared uploader (monkeypatched — no wrangler, no network)
+    monkeypatch.setattr(up, "upload_slug", lambda slug, **kw: f"https://pub-x.r2.dev/{slug}")
+    r = c.post(f"/api/publish/{run_id}")
+    assert r.status_code == 200
+    assert r.json()["base_url"] == "https://pub-x.r2.dev/web-test"
+
+
+def test_publish_upload_error_is_502(tmp_path, monkeypatch):
+    from forge_narrator import upload as up
+
+    def boom(slug, **kw):
+        raise up.UploadError("not logged in — run wrangler login")
+
+    c = _client(tmp_path)
+    run_id = _uploaded_run(c)
+    monkeypatch.setattr(up, "upload_slug", boom)
+    r = c.post(f"/api/publish/{run_id}")
+    assert r.status_code == 502
+    assert "not logged in" in r.json()["detail"]
+
+
+def test_publish_unknown_run_404(tmp_path):
+    c = _client(tmp_path)
+    assert c.post("/api/publish/nope").status_code == 404
