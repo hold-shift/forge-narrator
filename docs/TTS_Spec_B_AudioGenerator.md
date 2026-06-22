@@ -227,3 +227,26 @@ memoir prose:
   curated; the model stays isolated behind a `synth.py` parameter.
 
 **Voice locked: `fjnwTZkKtQOJaYzGLa6n`** (gscOrkde and George dropped).
+
+## 13. R2 upload (RESOLVED — closes the "operator uploads manually" open question)
+The generator can now upload the three files to **Cloudflare R2** and print the
+public base URL to paste into NotebookForge. Manual upload is still possible — the
+files remain in `out/{slug}/` and uploading is opt-in.
+
+- `forge-narrator upload <slug> [--bucket NAME] [--base-url URL] [--dry-run]` pushes
+  `out/{slug}/document.{mp3,marks.json,blocks.json}` to R2; `generate --upload` runs
+  the same step after writing the files (default `generate` is unchanged).
+- **Mechanism: shell out to `wrangler`** (no new pip deps — stdlib `subprocess`).
+  `wrangler` if on PATH, else `npx --yes wrangler@latest`. The Cloudflare OAuth
+  token lives in wrangler (`wrangler login` once); forge-narrator never reads,
+  stores, or logs any key/token (per §11).
+- Objects: `wrangler r2 object put {bucket}/{slug}/{file} --file <path> --remote
+  --content-type …` (`audio/mpeg` for the mp3, `application/json` for the two JSON).
+- Base URL: `--base-url` / `$FORGE_R2_BASE_URL` override (custom domain) wins; else
+  resolved from `wrangler r2 bucket dev-url get {bucket}` (the `pub-XXXX.r2.dev`
+  URL). Printed as `{base}/{slug}` (no trailing slash).
+- Bucket: `--bucket` > `$FORGE_R2_BUCKET` > `notebook-forge-audio`.
+- The tool does **not** create the bucket, enable public access, or set CORS —
+  those are one-time operator setup (`bucket create` / `dev-url enable` /
+  `cors set … --file out/r2-cors.json`); a missing/unconfigured bucket fails with a
+  clear hint. `--dry-run` prints the exact commands + base URL, runs nothing.

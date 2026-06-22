@@ -1,13 +1,16 @@
 """Command-line interface (Spec B §8, Spec C §10).
 
     forge-narrator estimate manifest.zip
-    forge-narrator generate manifest.zip --out ./out [--yes] [--no-cache] [--concurrency N]
+    forge-narrator generate manifest.zip --out ./out [--yes] [--no-cache] [--concurrency N] [--upload]
     forge-narrator serve [--port 8765] [--out ./out]
+    forge-narrator upload <slug> [--bucket NAME] [--base-url URL] [--dry-run]
 
 `estimate` makes no API calls — it reads the manifest and reports characters and
 the ElevenLabs credit cost. `generate` runs the full pipeline (synth → stitch →
 assemble) and is gated behind a cost confirmation before any paid call. `serve`
-launches the local web console (127.0.0.1) over the same pipeline.
+launches the local web console (127.0.0.1) over the same pipeline. `upload` pushes
+the three files in out/{slug}/ to Cloudflare R2 (via wrangler) and prints the base
+URL to paste into NotebookForge.
 """
 
 from __future__ import annotations
@@ -63,7 +66,29 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="refuse if uncached characters exceed this cap",
     )
+    gen.add_argument(
+        "--upload",
+        action="store_true",
+        help="after writing the files, upload out/{slug}/ to Cloudflare R2 (wrangler)",
+    )
     gen.set_defaults(func=cmd_generate)
+
+    up = sub.add_parser("upload", help="upload out/{slug}/ to Cloudflare R2 (via wrangler)")
+    up.add_argument("slug", help="document slug — the out/{slug}/ folder to upload")
+    up.add_argument("--out", default="./out", help="output root (default: ./out)")
+    up.add_argument(
+        "--bucket", default=None,
+        help="R2 bucket (default: $FORGE_R2_BUCKET or notebook-forge-audio)",
+    )
+    up.add_argument(
+        "--base-url", default=None,
+        help="public base URL override (default: $FORGE_R2_BASE_URL or resolved via wrangler)",
+    )
+    up.add_argument(
+        "--dry-run", action="store_true",
+        help="print the wrangler commands and base URL without uploading",
+    )
+    up.set_defaults(func=cmd_upload)
 
     srv = sub.add_parser("serve", help="run the local web console (127.0.0.1)")
     srv.add_argument("--port", type=int, default=8765, help="port (default: %(default)s)")
@@ -152,7 +177,18 @@ def cmd_generate(args) -> int:
           f"({summary['words']:,} words, {summary['duration_seconds']:.1f}s)")
     print(f"  {summary['blocks_cached']} cached, {summary['blocks_synthesised']} synthesised "
           f"· {summary['credits_spent']:,} credits (~${summary['cost_usd']:.2f})")
-    print("Validate with poc/player.html, then upload the folder to S3.")
+
+    if args.upload:
+        from .upload import UploadError, upload_slug
+        print()
+        try:
+            url = upload_slug(summary["slug"], out_root=args.out)
+        except UploadError as e:
+            sys.exit(f"error: upload failed: {e}")
+        _print_upload_reminder(url)
+    else:
+        print(f"Validate with poc/player.html. To publish: "
+              f"forge-narrator upload {summary['slug']}")
     return 0
 
 
@@ -185,6 +221,30 @@ def _make_cli_printer():
             sys.stdout.flush()
 
     return printer
+
+
+def _print_upload_reminder(url: str) -> None:
+    print('\nPaste this into NotebookForge → the document\'s Narration panel → '
+          '"Audio base URL":')
+    print(f"  {url}")
+
+
+def cmd_upload(args) -> int:
+    from .upload import UploadError, upload_slug
+
+    try:
+        url = upload_slug(
+            args.slug,
+            out_root=args.out,
+            bucket=args.bucket,
+            base_url=args.base_url,
+            dry_run=args.dry_run,
+        )
+    except UploadError as e:
+        sys.exit(f"error: {e}")
+    if not args.dry_run:
+        _print_upload_reminder(url)
+    return 0
 
 
 def cmd_serve(args) -> int:

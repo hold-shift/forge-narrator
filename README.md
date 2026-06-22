@@ -45,8 +45,39 @@ forge-narrator generate manifest.zip --no-cache         # force full re-synthesi
 forge-narrator generate manifest.zip --concurrency 6    # tune parallel requests
 ```
 
-Output lands in `out/{slug}/`. The operator uploads that folder to S3 and pastes
-the base URL into NotebookForge.
+Output lands in `out/{slug}/`. Publish it with `forge-narrator upload {slug}`
+(below) — or `generate --upload` to do both in one step — then paste the printed
+base URL into NotebookForge.
+
+## Uploading to R2
+
+Pushes the three files in `out/{slug}/` to Cloudflare R2 and prints the public
+base URL. It shells out to **wrangler** (no extra Python deps); the Cloudflare
+token lives in wrangler, never in forge-narrator.
+
+```bash
+# one-time setup
+npm i -g wrangler         # or use npx; forge-narrator falls back to `npx --yes wrangler@latest`
+wrangler login
+wrangler r2 bucket create notebook-forge-audio
+wrangler r2 bucket dev-url enable notebook-forge-audio
+wrangler r2 bucket cors set notebook-forge-audio --file out/r2-cors.json
+
+# then, per document
+forge-narrator upload 1934-1945_junior --dry-run   # print commands + base URL, upload nothing
+forge-narrator upload 1934-1945_junior             # upload + print the base URL
+forge-narrator generate manifest.zip --upload      # generate, then upload
+```
+
+Objects land at `{bucket}/{slug}/document.{mp3,marks.json,blocks.json}`, so the
+base URL is `{base}/{slug}` (the player appends `/document.mp3` etc.). Config:
+`--bucket` › `$FORGE_R2_BUCKET` › `notebook-forge-audio`; base URL `--base-url` ›
+`$FORGE_R2_BASE_URL` (custom domain) › resolved from `wrangler r2 bucket dev-url
+get`. Re-running overwrites (R2 put is upsert). The tool never creates the bucket,
+enables public access, or sets CORS — those are the one-time setup above.
+
+Paste the printed base URL into NotebookForge → the document's Narration panel →
+**Audio base URL**.
 
 ## Web console (`serve`)
 
