@@ -2,6 +2,7 @@ SSML_FINDINGS.md
 .elevenlabs_key
 out/
 cache/
+work/
 *.mp3
 *.marks.json
 .venv/

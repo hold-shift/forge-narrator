@@ -48,6 +48,24 @@ forge-narrator generate manifest.zip --concurrency 6    # tune parallel requests
 Output lands in `out/{slug}/`. The operator uploads that folder to S3 and pastes
 the base URL into NotebookForge.
 
+## Web console (`serve`)
+
+A local single-page console over the same pipeline (Spec C): pick a manifest,
+see the pre-flight cost summary, click **Generate**, watch live progress, then
+**Preview** the result in the player.
+
+```bash
+pip install -e '.[web]'                       # FastAPI + uvicorn (one-time)
+forge-narrator serve                          # → http://127.0.0.1:8765
+forge-narrator serve --port 8791 --char-cap 4000000
+```
+
+Localhost only (binds `127.0.0.1`). The **Generate** button is the cost gate
+(equivalent to `--yes`), re-checked server-side. The preview is served with HTTP
+Range support, so click-to-seek works (bare `python -m http.server` does not — it
+breaks `<audio>` seeking). The API key stays server-side — never sent to the
+browser or logged.
+
 ### Cost guard rails (mandatory)
 
 ElevenLabs bills **1 character = 1 credit**. `generate` prints the uncached

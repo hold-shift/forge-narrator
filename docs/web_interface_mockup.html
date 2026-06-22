@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>forge-narrator · web console (mockup)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --khaki: #6b6b3a; --khaki-mid: #b5b48a; --rule: #e0dfd8;
+    --ink: #111110; --ink-secondary: #444440; --ink-tertiary: #888880;
+    --bg: #fbfbf8; --card: #fff; --ok: #4a7a3a; --warn: #b06a1a; --err: #a33;
+  }
+  body { font-family: system-ui, -apple-system, sans-serif; color: var(--ink); background: var(--bg); line-height: 1.5; }
+  .top { background: #fff; border-bottom: 2px solid var(--khaki); padding: .9rem 1.5rem; display: flex; align-items: center; gap: .8rem; }
+  .top h1 { font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--khaki); font-weight: 700; }
+  .top .sub { font-size: 12px; color: var(--ink-tertiary); }
+  .top .mock { margin-left: auto; font-size: 11px; color: var(--ink-tertiary); border: 1px dashed var(--khaki-mid); padding: .2rem .5rem; border-radius: 4px; }
+  .wrap { max-width: 720px; margin: 2.5rem auto; padding: 0 1.5rem; }
+  .card { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 1.6rem; box-shadow: 0 1px 4px rgba(0,0,0,.04); }
+  h2 { font-size: 15px; color: var(--khaki); margin-bottom: 1rem; font-weight: 700; }
+  .drop { border: 2px dashed var(--khaki-mid); border-radius: 10px; padding: 2.4rem 1rem; text-align: center; color: var(--ink-secondary); cursor: pointer; transition: background .12s; }
+  .drop:hover { background: #f5f5ee; }
+  .drop .big { font-size: 15px; font-weight: 600; color: var(--ink); }
+  .drop .small { font-size: 12px; color: var(--ink-tertiary); margin-top: .4rem; }
+  .grid { display: grid; grid-template-columns: 1fr auto; gap: .5rem 1.5rem; font-size: 14px; margin: 0 0 1.2rem; }
+  .grid .k { color: var(--ink-secondary); }
+  .grid .v { text-align: right; font-variant-numeric: tabular-nums; }
+  .grid .v.em { font-weight: 700; color: var(--khaki); }
+  .estline { background: #f6f6ef; border-left: 3px solid var(--khaki); padding: .8rem 1rem; border-radius: 4px; font-size: 14px; margin-bottom: 1.3rem; }
+  .estline b { color: var(--khaki); }
+  button.go { font: inherit; font-weight: 600; font-size: 14px; background: var(--khaki); color: #fff; border: none; border-radius: 6px; padding: .7rem 1.4rem; cursor: pointer; }
+  button.go:disabled { background: var(--khaki-mid); cursor: not-allowed; }
+  button.ghost { font: inherit; font-size: 13px; background: #fff; color: var(--ink-secondary); border: 1px solid var(--khaki-mid); border-radius: 6px; padding: .55rem 1rem; cursor: pointer; }
+  .phases { display: flex; gap: .4rem; margin-bottom: 1.3rem; flex-wrap: wrap; }
+  .phase { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: .3rem .6rem; border-radius: 20px; background: #eee; color: var(--ink-tertiary); }
+  .phase.active { background: var(--khaki); color: #fff; }
+  .phase.done { background: #e4ebde; color: var(--ok); }
+  .bar { height: 12px; background: #eceae0; border-radius: 6px; overflow: hidden; margin: .4rem 0 1rem; }
+  .bar > i { display: block; height: 100%; background: var(--khaki); width: 0; transition: width .25s; }
+  .counters { display: grid; grid-template-columns: repeat(4,1fr); gap: .8rem; margin-bottom: 1.2rem; }
+  .counter { background: #f6f6ef; border-radius: 6px; padding: .6rem .7rem; }
+  .counter .n { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .counter .l { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-tertiary); }
+  .log { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: #1c1c19; color: #cfcfc4; border-radius: 6px; padding: .8rem 1rem; height: 150px; overflow-y: auto; line-height: 1.7; }
+  .log .ok { color: #9ac17e; } .log .warn { color: #e0b063; } .log .dim { color: #7d7d72; }
+  .files { font-family: ui-monospace, Menlo, monospace; font-size: 13px; background: #f6f6ef; border-radius: 6px; padding: .9rem 1rem; margin-bottom: 1.2rem; }
+  .files div { padding: .15rem 0; }
+  .reminder { background: #fdf6e9; border-left: 3px solid var(--warn); padding: .8rem 1rem; border-radius: 4px; font-size: 13px; color: var(--ink-secondary); margin-bottom: 1.2rem; }
+  .row { display: flex; gap: .7rem; align-items: center; }
+  .muted { color: var(--ink-tertiary); font-size: 12px; }
+  .hidden { display: none; }
+  a.restart { font-size: 12px; color: var(--khaki); cursor: pointer; text-decoration: underline; margin-left: auto; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <h1>forge-narrator</h1>
+    <span class="sub">audio console</span>
+    <span class="mock">MOCKUP — simulated data, no backend</span>
+  </div>
+
+  <div class="wrap">
+
+    <!-- STATE 1: SELECT -->
+    <section id="s-select" class="card">
+      <h2>Select a NotebookForge export</h2>
+      <div class="drop" id="drop">
+        <div class="big">Choose manifest.zip…</div>
+        <div class="small">or drop it here · also accepts a bare manifest.json</div>
+      </div>
+    </section>
+
+    <!-- STATE 2: PRE-FLIGHT -->
+    <section id="s-preflight" class="card hidden">
+      <h2>Pre-flight — Part_3_Singapore</h2>
+      <div class="grid">
+        <div class="k">Document slug</div><div class="v">Part_3_Singapore</div>
+        <div class="k">Voice / model</div><div class="v">fjnwTZ… · eleven_v3</div>
+        <div class="k">Blocks (total / narratable)</div><div class="v">93 / 87</div>
+        <div class="k">Cached (reused, free)</div><div class="v">30</div>
+        <div class="k">To synthesise</div><div class="v em">57 blocks</div>
+        <div class="k">Characters to synthesise</div><div class="v">41,230</div>
+        <div class="k">Estimated credits</div><div class="v">41,230</div>
+        <div class="k">Estimated cost</div><div class="v em">$4.12</div>
+      </div>
+      <div class="estline">
+        Will synthesise <b>57 blocks</b> (~41,230 chars), reuse <b>30 cached</b>.
+        Estimated <b>≈ 41,230 credits ≈ $4.12</b>. Nothing is billed until you press Generate.
+      </div>
+      <div class="row">
+        <button class="go" id="btn-generate">Generate</button>
+        <span class="muted">within the 4,000,000-char cap</span>
+        <a class="restart" onclick="reset()">choose a different file</a>
+      </div>
+    </section>
+
+    <!-- STATE 3: PROGRESS -->
+    <section id="s-progress" class="card hidden">
+      <h2>Converting — Part_3_Singapore</h2>
+      <div class="phases">
+        <span class="phase" data-p="parsing">parsing</span>
+        <span class="phase" data-p="synthesising">synthesising</span>
+        <span class="phase" data-p="stitching">stitching</span>
+        <span class="phase" data-p="assembling">assembling</span>
+        <span class="phase" data-p="done">done</span>
+      </div>
+      <div class="muted" id="prog-label">block 0 / 87</div>
+      <div class="bar"><i id="prog-bar"></i></div>
+      <div class="counters">
+        <div class="counter"><div class="n" id="c-chars">0</div><div class="l">chars done</div></div>
+        <div class="counter"><div class="n" id="c-credits">0</div><div class="l">credits</div></div>
+        <div class="counter"><div class="n" id="c-cost">$0.00</div><div class="l">cost</div></div>
+        <div class="counter"><div class="n" id="c-eta">—</div><div class="l">eta</div></div>
+      </div>
+      <div class="log" id="log"></div>
+    </section>
+
+    <!-- STATE 4: DONE -->
+    <section id="s-done" class="card hidden">
+      <h2>Done — Part_3_Singapore</h2>
+      <div class="grid">
+        <div class="k">Duration</div><div class="v">38m 52s</div>
+        <div class="k">Words</div><div class="v">9,418</div>
+        <div class="k">Credits spent</div><div class="v">41,230</div>
+        <div class="k">Cost</div><div class="v em">$4.12</div>
+      </div>
+      <div class="files">
+        <div>out/Part_3_Singapore/document.mp3</div>
+        <div>out/Part_3_Singapore/document.marks.json</div>
+        <div>out/Part_3_Singapore/document.blocks.json</div>
+      </div>
+      <div class="reminder">
+        <b>Next:</b> upload these three files to S3 and paste the base URL into
+        NotebookForge's Narration panel.
+      </div>
+      <div class="row">
+        <button class="go" onclick="alert('Mockup: opens /preview/Part_3_Singapore/ — the player against these outputs, served with HTTP Range so click-to-seek works.')">Preview in player</button>
+        <a class="restart" onclick="reset()">convert another</a>
+      </div>
+    </section>
+
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+const show = id => ['s-select','s-preflight','s-progress','s-done'].forEach(s => $(s).classList.toggle('hidden', s !== id));
+
+$('drop').onclick = () => show('s-preflight');
+$('btn-generate').onclick = runProgress;
+function reset(){ $('log').innerHTML=''; $('prog-bar').style.width='0'; show('s-select'); }
+
+function setPhase(p){
+  const order = ['parsing','synthesising','stitching','assembling','done'];
+  document.querySelectorAll('.phase').forEach(el => {
+    const i = order.indexOf(el.dataset.p), cur = order.indexOf(p);
+    el.classList.toggle('active', i === cur);
+    el.classList.toggle('done', i < cur);
+  });
+}
+function logLine(html){ const l=$('log'); l.innerHTML += html + '<br>'; l.scrollTop = l.scrollHeight; }
+
+function runProgress(){
+  show('s-progress'); setPhase('parsing'); logLine('<span class="dim">parsing manifest… 93 blocks, 87 narratable</span>');
+  const total = 87, cachedSet = new Set();
+  while (cachedSet.size < 30) cachedSet.add(Math.floor(Math.random()*total));
+  let done = 0, chars = 0, credits = 0; const rate = 0.0001;
+  const t0 = Date.now();
+  setTimeout(() => { setPhase('synthesising'); tick(); }, 700);
+
+  function tick(){
+    if (done >= total){ finish(); return; }
+    const i = done; done++;
+    const cached = cachedSet.has(i);
+    const c = 200 + Math.floor(Math.random()*900);
+    if (!cached){ chars += c; credits += c; }
+    $('c-chars').textContent = chars.toLocaleString();
+    $('c-credits').textContent = credits.toLocaleString();
+    $('c-cost').textContent = '$' + (credits*rate).toFixed(2);
+    $('prog-bar').style.width = (100*done/total) + '%';
+    $('prog-label').textContent = `block ${done} / ${total}`;
+    const elapsed = (Date.now()-t0)/1000, eta = Math.max(0, Math.round(elapsed/done*(total-done)));
+    $('c-eta').textContent = eta + 's';
+    if (cached) logLine(`<span class="dim">✓ block ${i} cached</span>`);
+    else if (Math.random() < 0.06){ logLine(`<span class="warn">⏳ 429 — backing off 2s</span>`); setTimeout(()=>{ logLine(`<span class="ok">✓ block ${i} synth 1.3s</span>`); next(); }, 600); return; }
+    else logLine(`<span class="ok">✓ block ${i} synth ${(0.8+Math.random()).toFixed(1)}s</span>`);
+    next();
+  }
+  function next(){ setTimeout(tick, cachedSet.has(done-1) ? 40 : 130); }
+  function finish(){
+    setPhase('stitching'); logLine('<span class="dim">stitching 87 block mp3s → document.mp3</span>');
+    setTimeout(()=>{ setPhase('assembling'); logLine('<span class="dim">assembling document.marks.json + document.blocks.json</span>'); }, 800);
+    setTimeout(()=>{ setPhase('done'); logLine('<span class="ok">done · out/Part_3_Singapore/</span>'); show('s-done'); }, 1700);
+  }
+}
+</script>
+</body>
+</html>

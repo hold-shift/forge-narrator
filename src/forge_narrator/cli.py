@@ -1,11 +1,13 @@
-"""Command-line interface (Spec B §8).
+"""Command-line interface (Spec B §8, Spec C §10).
 
     forge-narrator estimate manifest.zip
     forge-narrator generate manifest.zip --out ./out [--yes] [--no-cache] [--concurrency N]
+    forge-narrator serve [--port 8765] [--out ./out]
 
 `estimate` makes no API calls — it reads the manifest and reports characters and
 the ElevenLabs credit cost. `generate` runs the full pipeline (synth → stitch →
-assemble) and is gated behind a cost confirmation before any paid call.
+assemble) and is gated behind a cost confirmation before any paid call. `serve`
+launches the local web console (127.0.0.1) over the same pipeline.
 """
 
 from __future__ import annotations
@@ -62,6 +64,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="refuse if uncached characters exceed this cap",
     )
     gen.set_defaults(func=cmd_generate)
+
+    srv = sub.add_parser("serve", help="run the local web console (127.0.0.1)")
+    srv.add_argument("--port", type=int, default=8765, help="port (default: %(default)s)")
+    srv.add_argument("--out", default="./out", help="output root (default: ./out)")
+    srv.add_argument(
+        "--cache-dir", default=str(DEFAULT_CACHE_DIR),
+        help=f"block cache directory (default: {DEFAULT_CACHE_DIR})",
+    )
+    srv.add_argument(
+        "--char-cap", type=int, default=None,
+        help="refuse generation if uncached characters exceed this cap",
+    )
+    srv.set_defaults(func=cmd_serve)
     return ap
 
 
@@ -123,17 +138,65 @@ def cmd_generate(args) -> int:
     from .pipeline import generate
 
     try:
-        out_dir = generate(
+        summary = generate(
             manifest,
             cache,
             out_root=Path(args.out),
             concurrency=args.concurrency,
+            on_progress=_make_cli_printer(),
         )
     except Exception as e:  # surface cleanly rather than a raw traceback
         sys.exit(f"error: {e}")
-    print(f"\nDone. Wrote {out_dir}/")
-    print("  document.mp3 · document.marks.json · document.blocks.json")
+    print(f"\nDone. Wrote {summary['out_dir']}/")
+    print(f"  document.mp3 · document.marks.json · document.blocks.json "
+          f"({summary['words']:,} words, {summary['duration_seconds']:.1f}s)")
+    print(f"  {summary['blocks_cached']} cached, {summary['blocks_synthesised']} synthesised "
+          f"· {summary['credits_spent']:,} credits (~${summary['cost_usd']:.2f})")
     print("Validate with poc/player.html, then upload the folder to S3.")
+    return 0
+
+
+def _make_cli_printer():
+    """A printing on_progress callback — keeps the CLI's terminal output."""
+    state = {"phase": None}
+
+    def printer(ev: dict) -> None:
+        ph = ev["phase"]
+        if ph != state["phase"]:
+            if state["phase"] == "synthesising":
+                sys.stdout.write("\n")  # close the \r progress line
+            state["phase"] = ph
+            headers = {
+                "synthesising": "[1/3] Synthesising blocks (ElevenLabs /with-timestamps)…",
+                "stitching": "[2/3] Stitching → document.mp3…",
+                "assembling": "[3/3] Assembling marks.json + blocks.json…",
+            }
+            if ph in headers:
+                print(headers[ph])
+        if ph == "synthesising":
+            if ev["level"] == "warn":
+                sys.stdout.write(f"\n  {ev['message']}\n")
+            eta = f" · eta {ev['eta_seconds']}s" if ev["eta_seconds"] is not None else ""
+            sys.stdout.write(
+                f"\r  {ev['blocks_done']}/{ev['blocks_total']} blocks "
+                f"({ev['blocks_cached']} cached) · {ev['chars_done']:,} chars "
+                f"· ~${ev['cost_usd']:.2f}{eta}   "
+            )
+            sys.stdout.flush()
+
+    return printer
+
+
+def cmd_serve(args) -> int:
+    from .web.server import run_server
+
+    run_server(
+        host="127.0.0.1",
+        port=args.port,
+        out_root=args.out,
+        cache_dir=args.cache_dir,
+        char_cap=args.char_cap,
+    )
     return 0
 
 

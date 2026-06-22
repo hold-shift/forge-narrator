@@ -12,8 +12,16 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
+# The local web console (`forge-narrator serve`). Core estimate/generate need none
+# of these. SSE async + built-in HTTP Range via FileResponse (Spec C §10).
+web = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "python-multipart>=0.0.9",
+]
 dev = [
     "pytest>=8",
+    "httpx>=0.27",   # FastAPI TestClient (web tests)
 ]
 
 [project.scripts]
@@ -21,6 +29,9 @@ forge-narrator = "forge_narrator.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"forge_narrator.web" = ["static/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -93,12 +93,16 @@ def _request(voice_id: str, model: str, text: str, key: str) -> dict:
         return json.loads(r.read())
 
 
-def _synthesise_one(voice_id: str, model: str, block: Block, key: str) -> tuple[bytes, list[dict]]:
-    """Synthesise one block → (mp3 bytes, block-local word marks).
+def _synthesise_one(
+    voice_id: str, model: str, block: Block, key: str, on_throttle=None,
+) -> tuple[bytes, list[dict], float]:
+    """Synthesise one block → (mp3 bytes, block-local word marks, seconds).
 
     Retries 429 with backoff; retries one other error; then stops. Auth failures
     fail fast. Error messages carry the block index + HTTP status, never the key.
+    ``on_throttle(index, delay)`` is called (from this worker thread) on each 429.
     """
+    t0 = time.time()
     throttle_tries = 0
     hard_tries = 0
     while True:
@@ -113,7 +117,7 @@ def _synthesise_one(voice_id: str, model: str, block: Block, key: str) -> tuple[
                 al["character_start_times_seconds"],
                 al["character_end_times_seconds"],
             )
-            return audio, marks
+            return audio, marks, time.time() - t0
         except urllib.error.HTTPError as e:
             if e.code == 429:
                 throttle_tries += 1
@@ -125,6 +129,8 @@ def _synthesise_one(voice_id: str, model: str, block: Block, key: str) -> tuple[
                 retry_after = e.headers.get("Retry-After")
                 delay = (float(retry_after) if retry_after and retry_after.isdigit()
                          else min(_BACKOFF_CAP, _BACKOFF_BASE ** throttle_tries))
+                if on_throttle:
+                    on_throttle(block.index, delay)
                 time.sleep(delay)
                 continue
             if e.code in (401, 403):
@@ -157,20 +163,29 @@ def synthesise(
     cache: BlockCache,
     *,
     concurrency: int = 8,
-    progress=None,
+    on_block=None,
+    on_throttle=None,
 ) -> SynthResult:
     """Ensure every block's audio + marks are cached, synthesising the misses.
 
-    ``progress`` (optional) is called with ``(done, total)`` after each block.
+    Callbacks (optional) report progress without this module knowing about cost or
+    presentation (kept in the caller — one source of truth, Spec C §8):
+    - ``on_block(index, cached: bool, chars: int, seconds: float | None)`` — once
+      per block: cached blocks first (``seconds=None``), then each synthesised
+      block as it completes. Called from the main thread (serialised).
+    - ``on_throttle(index, delay: float)`` — on each 429 back-off (from a worker
+      thread; the callback must be thread-safe).
+
     Raises ``SynthesisError`` on the first unrecoverable failure (after cancelling
     pending work) so the operator can fix and re-run — cached blocks make it cheap.
     """
     todo = [b for b in manifest.blocks if not cache.has(b.hash)]
-    from_cache = len(manifest.blocks) - len(todo)
-    total = len(manifest.blocks)
-    done = from_cache
-    if progress and from_cache:
-        progress(done, total)
+    cached = [b for b in manifest.blocks if cache.has(b.hash)]
+    from_cache = len(cached)
+
+    if on_block:
+        for b in cached:
+            on_block(b.index, True, b.billed_chars, None)
 
     if not todo:
         return SynthResult(synthesised=0, from_cache=from_cache)
@@ -180,17 +195,16 @@ def synthesise(
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
-            pool.submit(_synthesise_one, manifest.voice, manifest.model, b, key): b
+            pool.submit(_synthesise_one, manifest.voice, manifest.model, b, key, on_throttle): b
             for b in todo
         }
         try:
             for fut in as_completed(futures):
                 block = futures[fut]
-                audio, marks = fut.result()  # re-raises SynthesisError
+                audio, marks, seconds = fut.result()  # re-raises SynthesisError
                 cache.put(block.hash, audio, marks)
-                done += 1
-                if progress:
-                    progress(done, total)
+                if on_block:
+                    on_block(block.index, False, block.billed_chars, seconds)
         except SynthesisError:
             for f in futures:
                 f.cancel()

@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>forge-narrator · audio console</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --khaki: #6b6b3a; --khaki-mid: #b5b48a; --rule: #e0dfd8;
+    --ink: #111110; --ink-secondary: #444440; --ink-tertiary: #888880;
+    --bg: #fbfbf8; --card: #fff; --ok: #4a7a3a; --warn: #b06a1a; --err: #a33;
+  }
+  body { font-family: system-ui, -apple-system, sans-serif; color: var(--ink); background: var(--bg); line-height: 1.5; }
+  .top { background: #fff; border-bottom: 2px solid var(--khaki); padding: .9rem 1.5rem; display: flex; align-items: center; gap: .8rem; }
+  .top h1 { font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--khaki); font-weight: 700; }
+  .top .sub { font-size: 12px; color: var(--ink-tertiary); }
+  .top .host { margin-left: auto; font-size: 11px; color: var(--ink-tertiary); }
+  .wrap { max-width: 720px; margin: 2.5rem auto; padding: 0 1.5rem; }
+  .card { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 1.6rem; box-shadow: 0 1px 4px rgba(0,0,0,.04); }
+  h2 { font-size: 15px; color: var(--khaki); margin-bottom: 1rem; font-weight: 700; }
+  .drop { border: 2px dashed var(--khaki-mid); border-radius: 10px; padding: 2.4rem 1rem; text-align: center; color: var(--ink-secondary); cursor: pointer; transition: background .12s; }
+  .drop:hover, .drop.over { background: #f5f5ee; }
+  .drop .big { font-size: 15px; font-weight: 600; color: var(--ink); }
+  .drop .small { font-size: 12px; color: var(--ink-tertiary); margin-top: .4rem; }
+  .grid { display: grid; grid-template-columns: 1fr auto; gap: .5rem 1.5rem; font-size: 14px; margin: 0 0 1.2rem; }
+  .grid .k { color: var(--ink-secondary); }
+  .grid .v { text-align: right; font-variant-numeric: tabular-nums; }
+  .grid .v.em { font-weight: 700; color: var(--khaki); }
+  .estline { background: #f6f6ef; border-left: 3px solid var(--khaki); padding: .8rem 1rem; border-radius: 4px; font-size: 14px; margin-bottom: 1.3rem; }
+  .estline b { color: var(--khaki); }
+  button.go { font: inherit; font-weight: 600; font-size: 14px; background: var(--khaki); color: #fff; border: none; border-radius: 6px; padding: .7rem 1.4rem; cursor: pointer; }
+  button.go:disabled { background: var(--khaki-mid); cursor: not-allowed; }
+  .phases { display: flex; gap: .4rem; margin-bottom: 1.3rem; flex-wrap: wrap; }
+  .phase { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: .3rem .6rem; border-radius: 20px; background: #eee; color: var(--ink-tertiary); }
+  .phase.active { background: var(--khaki); color: #fff; }
+  .phase.done { background: #e4ebde; color: var(--ok); }
+  .bar { height: 12px; background: #eceae0; border-radius: 6px; overflow: hidden; margin: .4rem 0 1rem; }
+  .bar > i { display: block; height: 100%; background: var(--khaki); width: 0; transition: width .25s; }
+  .counters { display: grid; grid-template-columns: repeat(4,1fr); gap: .8rem; margin-bottom: 1.2rem; }
+  .counter { background: #f6f6ef; border-radius: 6px; padding: .6rem .7rem; }
+  .counter .n { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .counter .l { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-tertiary); }
+  .log { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: #1c1c19; color: #cfcfc4; border-radius: 6px; padding: .8rem 1rem; height: 170px; overflow-y: auto; line-height: 1.7; }
+  .log .ok { color: #9ac17e; } .log .warn { color: #e0b063; } .log .dim { color: #7d7d72; } .log .err { color: #e08a8a; }
+  .files { font-family: ui-monospace, Menlo, monospace; font-size: 13px; background: #f6f6ef; border-radius: 6px; padding: .9rem 1rem; margin-bottom: 1.2rem; }
+  .files div { padding: .15rem 0; }
+  .reminder { background: #fdf6e9; border-left: 3px solid var(--warn); padding: .8rem 1rem; border-radius: 4px; font-size: 13px; color: var(--ink-secondary); margin-bottom: 1.2rem; }
+  .err-box { background: #fbeaea; border-left: 3px solid var(--err); padding: .8rem 1rem; border-radius: 4px; font-size: 13px; color: #7a2222; margin: 1rem 0; }
+  .row { display: flex; gap: .7rem; align-items: center; }
+  .muted { color: var(--ink-tertiary); font-size: 12px; }
+  .hidden { display: none; }
+  a.restart { font-size: 12px; color: var(--khaki); cursor: pointer; text-decoration: underline; margin-left: auto; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <h1>forge-narrator</h1>
+    <span class="sub">audio console</span>
+    <span class="host">localhost</span>
+  </div>
+
+  <div class="wrap">
+    <!-- STATE 1: SELECT -->
+    <section id="s-select" class="card">
+      <h2>Select a NotebookForge export</h2>
+      <div class="drop" id="drop">
+        <div class="big">Choose manifest.zip…</div>
+        <div class="small">or drop it here · also accepts a bare manifest.json</div>
+      </div>
+      <input type="file" id="file" accept=".zip,.json" class="hidden">
+      <div id="select-err" class="err-box hidden"></div>
+    </section>
+
+    <!-- STATE 2: PRE-FLIGHT -->
+    <section id="s-preflight" class="card hidden">
+      <h2 id="pf-title">Pre-flight</h2>
+      <div class="grid" id="pf-grid"></div>
+      <div class="estline" id="pf-estline"></div>
+      <div class="row">
+        <button class="go" id="btn-generate">Generate</button>
+        <span class="muted" id="pf-capnote"></span>
+        <a class="restart" id="pf-reset">choose a different file</a>
+      </div>
+    </section>
+
+    <!-- STATE 3: PROGRESS -->
+    <section id="s-progress" class="card hidden">
+      <h2 id="pg-title">Converting</h2>
+      <div class="phases">
+        <span class="phase" data-p="parsing">parsing</span>
+        <span class="phase" data-p="synthesising">synthesising</span>
+        <span class="phase" data-p="stitching">stitching</span>
+        <span class="phase" data-p="assembling">assembling</span>
+        <span class="phase" data-p="done">done</span>
+      </div>
+      <div class="muted" id="prog-label">starting…</div>
+      <div class="bar"><i id="prog-bar"></i></div>
+      <div class="counters">
+        <div class="counter"><div class="n" id="c-chars">0</div><div class="l">chars done</div></div>
+        <div class="counter"><div class="n" id="c-credits">0</div><div class="l">credits</div></div>
+        <div class="counter"><div class="n" id="c-cost">$0.00</div><div class="l">cost</div></div>
+        <div class="counter"><div class="n" id="c-eta">—</div><div class="l">eta</div></div>
+      </div>
+      <div class="log" id="log"></div>
+      <div id="prog-err" class="err-box hidden"></div>
+    </section>
+
+    <!-- STATE 4: DONE -->
+    <section id="s-done" class="card hidden">
+      <h2 id="dn-title">Done</h2>
+      <div class="grid" id="dn-grid"></div>
+      <div class="files" id="dn-files"></div>
+      <div class="reminder">
+        <b>Next:</b> upload these three files to S3 and paste the base URL into
+        NotebookForge's Narration panel.
+      </div>
+      <div class="row">
+        <button class="go" id="btn-preview">Preview in player</button>
+        <a class="restart" id="dn-reset">convert another</a>
+      </div>
+    </section>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = n => (n ?? 0).toLocaleString();
+const show = id => ['s-select','s-preflight','s-progress','s-done']
+  .forEach(s => $(s).classList.toggle('hidden', s !== id));
+
+let runId = null, slug = null, es = null;
+
+// ---- Select ----
+$('drop').onclick = () => $('file').click();
+$('file').onchange = e => { if (e.target.files[0]) uploadFile(e.target.files[0]); };
+['dragover','dragenter'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));
+['dragleave','drop'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('over'); }));
+$('drop').addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) uploadFile(f); });
+$('pf-reset').onclick = reset;
+$('dn-reset').onclick = reset;
+
+function reset() {
+  if (es) { es.close(); es = null; }
+  runId = slug = null;
+  $('file').value = '';
+  $('select-err').classList.add('hidden');
+  $('log').innerHTML = ''; $('prog-bar').style.width = '0'; $('prog-err').classList.add('hidden');
+  show('s-select');
+}
+
+async function uploadFile(file) {
+  $('select-err').classList.add('hidden');
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const r = await fetch('/api/upload', { method: 'POST', body: fd });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || 'upload failed');
+    runId = data.run_id; slug = data.slug;
+    await inspect();
+  } catch (e) {
+    $('select-err').textContent = e.message;
+    $('select-err').classList.remove('hidden');
+  }
+}
+
+// ---- Pre-flight ----
+async function inspect() {
+  const r = await fetch('/api/inspect/' + runId);
+  const d = await r.json();
+  if (!r.ok) { $('select-err').textContent = d.detail || 'inspect failed'; $('select-err').classList.remove('hidden'); return; }
+  $('pf-title').textContent = 'Pre-flight — ' + d.slug;
+  const voiceShort = d.voice.length > 8 ? d.voice.slice(0, 6) + '…' : d.voice;
+  $('pf-grid').innerHTML = `
+    <div class="k">Document slug</div><div class="v">${d.slug}</div>
+    <div class="k">Voice / model</div><div class="v">${voiceShort} · ${d.model}</div>
+    <div class="k">Blocks (total / narratable)</div><div class="v">${d.block_total} / ${d.block_narratable}</div>
+    <div class="k">Cached (reused, free)</div><div class="v">${fmt(d.blocks_cached)}</div>
+    <div class="k">To synthesise</div><div class="v em">${fmt(d.blocks_to_synth)} blocks</div>
+    <div class="k">Characters to synthesise</div><div class="v">${fmt(d.chars_to_synth)}</div>
+    <div class="k">Estimated credits</div><div class="v">${fmt(d.credits_est)}</div>
+    <div class="k">Estimated cost</div><div class="v em">$${d.cost_usd_est.toFixed(2)}</div>`;
+  $('pf-estline').innerHTML = d.blocks_to_synth === 0
+    ? `All <b>${d.block_total} blocks</b> are cached — generation is free (stitch + assemble only).`
+    : `Will synthesise <b>${fmt(d.blocks_to_synth)} blocks</b> (~${fmt(d.chars_to_synth)} chars), reuse <b>${fmt(d.blocks_cached)} cached</b>. Estimated <b>≈ ${fmt(d.credits_est)} credits ≈ $${d.cost_usd_est.toFixed(2)}</b>. Nothing is billed until you press Generate.`;
+  $('btn-generate').disabled = d.over_cap;
+  $('pf-capnote').textContent = d.char_cap == null ? ''
+    : (d.over_cap ? `exceeds the ${fmt(d.char_cap)}-char cap` : `within the ${fmt(d.char_cap)}-char cap`);
+  show('s-preflight');
+}
+
+// ---- Generate + progress ----
+$('btn-generate').onclick = async () => {
+  $('btn-generate').disabled = true;
+  const r = await fetch('/api/generate/' + runId, { method: 'POST' });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    $('btn-generate').disabled = false;
+    alert('Cannot generate: ' + (d.detail || r.status));
+    return;
+  }
+  startProgress();
+};
+
+function setPhase(p) {
+  const order = ['parsing','synthesising','stitching','assembling','done'];
+  document.querySelectorAll('.phase').forEach(el => {
+    const i = order.indexOf(el.dataset.p), cur = order.indexOf(p);
+    el.classList.toggle('active', i === cur);
+    el.classList.toggle('done', i < cur);
+  });
+}
+function logLine(cls, text) {
+  const l = $('log');
+  l.innerHTML += `<span class="${cls}">${text}</span><br>`;
+  l.scrollTop = l.scrollHeight;
+}
+
+function startProgress() {
+  $('pg-title').textContent = 'Converting — ' + slug;
+  $('log').innerHTML = ''; $('prog-bar').style.width = '0'; $('prog-err').classList.add('hidden');
+  show('s-progress'); setPhase('parsing');
+  logLine('dim', 'parsing manifest…');
+
+  es = new EventSource('/api/progress/' + runId);
+  es.addEventListener('progress', e => updateProgress(JSON.parse(e.data)));
+  es.addEventListener('done', e => { es.close(); es = null; finish(JSON.parse(e.data)); });
+  es.addEventListener('error', e => {
+    // EventSource also fires 'error' on transient disconnects with no data.
+    if (e.data) { const d = JSON.parse(e.data); es.close(); es = null; failRun(d); }
+  });
+}
+
+function updateProgress(ev) {
+  setPhase(ev.phase);
+  if (ev.blocks_total) {
+    $('prog-bar').style.width = (100 * ev.blocks_done / ev.blocks_total) + '%';
+    $('prog-label').textContent = `block ${ev.blocks_done} / ${ev.blocks_total} (${ev.blocks_cached} cached)`;
+  }
+  $('c-chars').textContent = fmt(ev.chars_done);
+  $('c-credits').textContent = fmt(ev.credits_spent);
+  $('c-cost').textContent = '$' + (ev.cost_usd ?? 0).toFixed(2);
+  $('c-eta').textContent = ev.eta_seconds == null ? '—' : ev.eta_seconds + 's';
+  if (ev.message) {
+    const cls = ev.level === 'warn' ? 'warn'
+      : /cached/.test(ev.message) ? 'dim'
+      : /block \d+ synth/.test(ev.message) ? 'ok' : 'dim';
+    logLine(cls, (ev.level === 'warn' ? '⏳ ' : '✓ ') + ev.message);
+  }
+}
+
+function failRun(d) {
+  setPhase('synthesising');
+  const where = d.block_index != null ? ` (block ${d.block_index})` : '';
+  logLine('err', '✕ ' + d.message);
+  $('prog-err').innerHTML = `<b>Generation failed${where}:</b> ${d.message}<br>` +
+    `Fix and re-run — cached blocks make it cheap. ` +
+    `<a class="restart" id="retry" style="margin:0">retry</a>`;
+  $('prog-err').classList.remove('hidden');
+  $('retry').onclick = () => $('btn-generate').click();
+  show('s-progress');
+}
+
+function finish(s) {
+  setPhase('done');
+  logLine('ok', `done · ${s.out_dir}/`);
+  const mins = Math.floor(s.duration_seconds / 60), secs = Math.round(s.duration_seconds % 60);
+  $('dn-title').textContent = 'Done — ' + s.slug;
+  $('dn-grid').innerHTML = `
+    <div class="k">Duration</div><div class="v">${mins}m ${secs}s</div>
+    <div class="k">Words</div><div class="v">${fmt(s.words)}</div>
+    <div class="k">Blocks (cached / synthesised)</div><div class="v">${fmt(s.blocks_cached)} / ${fmt(s.blocks_synthesised)}</div>
+    <div class="k">Credits spent</div><div class="v">${fmt(s.credits_spent)}</div>
+    <div class="k">Cost</div><div class="v em">$${(s.cost_usd ?? 0).toFixed(2)}</div>`;
+  $('dn-files').innerHTML = [s.mp3, s.marks, s.blocks].map(p => `<div>${p}</div>`).join('');
+  $('btn-preview').onclick = () => window.open('/preview/' + encodeURIComponent(s.slug) + '/', '_blank');
+  show('s-done');
+}
+</script>
+</body>
+</html>

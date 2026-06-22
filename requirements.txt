@@ -8,3 +8,7 @@
 #   python3.11 -m venv .venv && .venv/bin/pip install -e .
 #
 # For the test suite:  .venv/bin/pip install -e '.[dev]'   (pytest)
+#
+# The local web console (`forge-narrator serve`) needs FastAPI + uvicorn:
+#   .venv/bin/pip install -e '.[web]'
+#     fastapi, uvicorn[standard], python-multipart
