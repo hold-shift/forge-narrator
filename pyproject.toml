@@ -7,16 +7,11 @@ name = "forge-narrator"
 version = "0.1.0"
 description = "Turn a NotebookForge SSML manifest into narrated audio with word-level timing."
 requires-python = ">=3.11"
-dependencies = [
-    "boto3>=1.34",
-]
+# No runtime Python deps: ElevenLabs is called over HTTP with the stdlib (urllib).
+# ffmpeg + ffprobe are hard dependencies but installed via Homebrew, not pip.
+dependencies = []
 
 [project.optional-dependencies]
-# The aligner only installs cleanly on Apple Silicon / Python 3.11. Kept optional
-# so `estimate` and the manifest reader can be used/tested without it.
-align = [
-    "whispermlx",
-]
 dev = [
     "pytest>=8",
 ]

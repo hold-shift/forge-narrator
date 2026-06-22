@@ -8,16 +8,16 @@ calls — parsing is verified first (build order step 2).
 Manifest schema (as emitted by NotebookForge)::
 
     {
-      "document_slug": "1934-1945_junior", # output folder name: out/{slug}/
-      "title": "Junior",                   # human label (optional)
-      "voice": "Brian",
-      "engine": "generative",
+      "document_slug": "1934-1945_junior",  # output folder name: out/{slug}/
+      "title": "Junior",                    # human label (optional)
+      "voice": "fjnwTZkKtQOJaYzGLa6n",      # ElevenLabs voice id
+      "model": "eleven_v3",
       "blocks": [
         {
           "index": 0,
-          "type": "heading",               # "heading" | "paragraph"
-          "ssml": "<speak>...</speak>",     # exact SSML to send to Polly
-          "hash": "<sha256 hex>"           # sha256(ssml + voice + engine) — cache key
+          "type": "heading",                # "heading" | "paragraph" | "footnote"
+          "ssml": "<speak>...</speak>",      # exact text/SSML to send to ElevenLabs
+          "hash": "<sha256 hex>"            # sha256(ssml + voice + model) — cache key
         },
         ...
       ]
@@ -25,10 +25,11 @@ Manifest schema (as emitted by NotebookForge)::
 
 NotebookForge exports SSML only — no plain ``text`` and no ``version`` field. The
 generator derives each block's readable text from its SSML (see ``ssml.py``); both
-are tolerated if present (``slug``/``document_slug``, an optional ``text``). Only
-``heading`` and ``paragraph`` blocks appear; images, doc groups, nav and (v1)
-footnotes are already stripped per the Overview's "What is narratable" table. The
-generator stays dumb: it speaks what it's given.
+``slug``/``document_slug`` and an optional ``text`` are tolerated if present.
+``heading``/``paragraph``/``footnote`` blocks appear; images, doc groups and nav
+are stripped per the Overview's "What is narratable" table. Footnotes are narrated
+inline but flagged ``highlightable: false`` downstream. The generator stays dumb:
+it speaks what it's given.
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ from .ssml import ssml_to_text
 
 MANIFEST_NAME = "manifest.json"
 SUPPORTED_VERSION = 1
-BLOCK_TYPES = ("heading", "paragraph")
+BLOCK_TYPES = ("heading", "paragraph", "footnote")
 
 
 class ManifestError(Exception):
@@ -62,11 +63,11 @@ class Block:
 
     @property
     def billed_chars(self) -> int:
-        """Characters submitted to Polly (the SSML string).
+        """Characters submitted to ElevenLabs (the SSML/text string).
 
-        Used for cost/throughput estimates. This is the full SSML length including
-        tags — a deliberate over-estimate for the cost guard rail (AWS may bill
-        only the spoken characters), so the printed bill is never a surprise low.
+        ElevenLabs bills 1 character = 1 credit. This is the full string length
+        including any tags — a deliberate over-estimate for the cost guard rail
+        (ElevenLabs may strip tags), so the printed bill is never a surprise low.
         """
         return len(self.ssml)
 
@@ -79,13 +80,13 @@ class Manifest:
     slug: str
     title: str
     voice: str
-    engine: str
+    model: str
     blocks: tuple[Block, ...]
     source: Path
 
     @property
     def transcript(self) -> str:
-        """The known transcript (block plain text in order) for forced alignment."""
+        """Block plain text in order (convenience; no aligner consumes it now)."""
         return "\n\n".join(b.text for b in self.blocks)
 
     @property
@@ -154,7 +155,7 @@ def load_manifest(path: str | Path, *, verify_hashes: bool = True) -> Manifest:
     if not slug:
         raise ManifestError(f"{path.name}: missing 'document_slug' (or 'slug')")
     voice = str(_require(data, "voice", path.name))
-    engine = str(_require(data, "engine", path.name))
+    model = str(_require(data, "model", path.name))
     title = str(data.get("title", slug))
 
     raw_blocks = _require(data, "blocks", path.name)
@@ -187,7 +188,7 @@ def load_manifest(path: str | Path, *, verify_hashes: bool = True) -> Manifest:
                 "(blocks must be in order)"
             )
         if verify_hashes:
-            expected = block_hash(ssml, voice, engine)
+            expected = block_hash(ssml, voice, model)
             if expected != bhash:
                 raise ManifestError(
                     f"{where}: hash mismatch — manifest says {bhash[:12]}…, "
@@ -201,7 +202,7 @@ def load_manifest(path: str | Path, *, verify_hashes: bool = True) -> Manifest:
         slug=slug,
         title=title,
         voice=voice,
-        engine=engine,
+        model=model,
         blocks=tuple(blocks),
         source=path,
     )

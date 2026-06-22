@@ -20,31 +20,32 @@ def _write_zip(tmp_path, data, name="manifest.zip", member="manifest.json"):
 
 
 def test_real_format_document_slug_and_derived_text(tmp_path):
-    """NotebookForge format: document_slug, no version, SSML-only blocks."""
+    """NotebookForge ElevenLabs format: document_slug, no version, SSML-only blocks."""
     from forge_narrator.hashing import block_hash
 
-    ssml = ('<speak><break time="700ms"/><prosody rate="95%">Prologue</prosody>'
-            '<break time="400ms"/></speak>')
+    voice, model = "fjnwTZkKtQOJaYzGLa6n", "eleven_v3"
+    ssml = 'Prologue<break time="0.4s" />'
     data = {
         "document_slug": "1934-1945_junior",
         "title": "Junior",
-        "voice": "Brian",
-        "engine": "generative",
+        "voice": voice,
+        "model": model,
         "blocks": [
             {"index": 0, "type": "heading", "ssml": ssml,
-             "hash": block_hash(ssml, "Brian", "generative")},
+             "hash": block_hash(ssml, voice, model)},
         ],
     }
     m = load_manifest(_write_json(tmp_path, data))
     assert m.slug == "1934-1945_junior"
-    assert m.blocks[0].text == "Prologue"          # derived from SSML
+    assert m.model == "eleven_v3"
+    assert m.blocks[0].text == "Prologue"          # derived from SSML (break stripped)
     assert m.transcript == "Prologue"
 
 
 def test_load_from_json(tmp_path, manifest_dict):
     m = load_manifest(_write_json(tmp_path, manifest_dict))
     assert m.slug == "test-doc"
-    assert m.voice == "Brian"
+    assert m.model == "eleven_v3"
     assert len(m.blocks) == 3
     assert m.blocks[0].type == "heading"
 
@@ -68,9 +69,15 @@ def test_transcript_and_chars(manifest_dict, tmp_path):
     assert m.total_billed_chars == sum(len(b.ssml) for b in m.blocks)
 
 
-def test_missing_field(tmp_path, manifest_dict):
+def test_missing_voice(tmp_path, manifest_dict):
     del manifest_dict["voice"]
     with pytest.raises(ManifestError, match="voice"):
+        load_manifest(_write_json(tmp_path, manifest_dict))
+
+
+def test_missing_model(tmp_path, manifest_dict):
+    del manifest_dict["model"]
+    with pytest.raises(ManifestError, match="model"):
         load_manifest(_write_json(tmp_path, manifest_dict))
 
 
@@ -80,8 +87,19 @@ def test_bad_version(tmp_path, manifest_dict):
         load_manifest(_write_json(tmp_path, manifest_dict))
 
 
+def test_footnote_is_a_valid_type(tmp_path, manifest_dict):
+    from forge_narrator.hashing import block_hash
+
+    ssml = manifest_dict["blocks"][1]["ssml"]
+    manifest_dict["blocks"][1]["type"] = "footnote"
+    manifest_dict["blocks"][1]["hash"] = block_hash(ssml, manifest_dict["voice"],
+                                                    manifest_dict["model"])
+    m = load_manifest(_write_json(tmp_path, manifest_dict))
+    assert m.blocks[1].type == "footnote"
+
+
 def test_bad_block_type(tmp_path, manifest_dict):
-    manifest_dict["blocks"][0]["type"] = "footnote"
+    manifest_dict["blocks"][0]["type"] = "image"  # not narratable → invalid here
     with pytest.raises(ManifestError, match="type"):
         load_manifest(_write_json(tmp_path, manifest_dict))
 

@@ -1,32 +1,32 @@
 {
   "document_slug": "junior-sample",
   "title": "Junior (sample)",
-  "voice": "Brian",
-  "engine": "generative",
+  "voice": "fjnwTZkKtQOJaYzGLa6n",
+  "model": "eleven_v3",
   "blocks": [
     {
       "index": 0,
       "type": "heading",
-      "ssml": "<speak><break time='700ms'/><prosody rate='95%'>The boy I once knew but now remember</prosody><break time='400ms'/></speak>",
-      "hash": "15b3b26cd31af26fca89de1328646cbb6ee6e5e0c5b08300af2b5f4fe92e5ea3"
+      "ssml": "The boy I once knew but now remember",
+      "hash": "6e0e54faf1b01ce7d2508cef10cf409222cda6e43796bc8cb65b999c334bd747"
     },
     {
       "index": 1,
       "type": "paragraph",
-      "ssml": "<speak>Junior hurries down the hill from the convent towards the railway yard. It is becoming cold and dew is forming on the ground. There will be a frost in the morning. It is dark already and not yet six o'clock.<break time='500ms'/></speak>",
-      "hash": "b35bd3064428b3969c3bb0079dbd6abcebbd13683b300d3004bc65e410ac1a0f"
+      "ssml": "Junior hurries down the hill from the convent towards the railway yard. It is becoming cold and dew is forming on the ground. There will be a frost in the morning. It is dark already and not yet six o'clock.",
+      "hash": "7788d3aa529578f04ce1d58a93f1873d5b18292813da11d7a0467238dd4ac487"
     },
     {
       "index": 2,
       "type": "paragraph",
-      "ssml": "<speak>Mum will have something nice for tea although Junior is not all that fond of food. The fire in the stove though will be nice and after tea sitting around the stove in warm pyjamas with the oven open is best.<break time='500ms'/></speak>",
-      "hash": "f062f1e8583b4f50c6bf18250bd47d238727e16e4447002af3f7fad6867ed0a3"
+      "ssml": "Mum will have something nice for tea although Junior is not all that fond of food. The fire in the stove though will be nice and after tea sitting around the stove in warm pyjamas with the oven open is best.",
+      "hash": "aabe242bebb403db3012d62e779aef62ba158577bc3e7d32255d74e7da92990f"
     },
     {
       "index": 3,
       "type": "paragraph",
-      "ssml": "<speak>The name Junior came about because his father was also Robert, and to avoid confusion the boy had been called Junior from infancy. It followed him through the primary school roll books.<break time='500ms'/></speak>",
-      "hash": "e80034e753d4827cab41fbeafa86d88441b6ddec95c54113aea8d7343a63c041"
+      "ssml": "The name Junior came about because his father was also Robert, and to avoid confusion the boy had been called Junior from infancy. It followed him through the primary school roll books.",
+      "hash": "a831cee111c059fdb8247ec0b303500cba9a0bc15eda4196e1c369cda593424f"
     }
   ]
 }

@@ -20,16 +20,16 @@ def _two_block_manifest(tmp_path, poc_mp3):
     """A 2-block manifest whose cache entries are both the POC mp3."""
     from forge_narrator.hashing import block_hash
 
-    voice, engine = "Brian", "generative"
-    ssml0 = "<speak>Block zero.</speak>"
-    ssml1 = "<speak>Block one.</speak>"
+    voice, model = "fjnwTZkKtQOJaYzGLa6n", "eleven_v3"
+    ssml0 = "Block zero."
+    ssml1 = "Block one."
     data = {
-        "version": 1, "slug": "stitch-test", "voice": voice, "engine": engine,
+        "version": 1, "slug": "stitch-test", "voice": voice, "model": model,
         "blocks": [
             {"index": 0, "type": "heading", "text": "Block zero",
-             "ssml": ssml0, "hash": block_hash(ssml0, voice, engine)},
+             "ssml": ssml0, "hash": block_hash(ssml0, voice, model)},
             {"index": 1, "type": "paragraph", "text": "Block one",
-             "ssml": ssml1, "hash": block_hash(ssml1, voice, engine)},
+             "ssml": ssml1, "hash": block_hash(ssml1, voice, model)},
         ],
     }
     p = tmp_path / "manifest.json"
@@ -39,7 +39,7 @@ def _two_block_manifest(tmp_path, poc_mp3):
     cache = BlockCache(tmp_path / "cache")
     audio = poc_mp3.read_bytes()
     for b in m.blocks:
-        cache.put(b.hash, audio)
+        cache.put(b.hash, audio, [])  # marks not needed for the stitch test
     return m, cache
 
 

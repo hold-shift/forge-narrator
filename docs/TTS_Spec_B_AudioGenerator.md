@@ -1,225 +1,229 @@
 # TTS Spec B — Audio Generator (`forge-narrator`)
 
-*Read `TTS_Spec_0_Overview.md` first. This is a standalone tool, separate from
-NotebookForge. It consumes a manifest zip and produces the three S3 files. It is
-the only tool that touches Polly and the aligner.*
+*Read `TTS_Spec_0_Overview.md` first. Standalone tool, separate from
+NotebookForge. Consumes a manifest zip, produces the three S3 files. It is the
+only tool that touches the TTS provider.*
 
-Location: `/Users/cs/ClaudeCode/forge-narrator/` (own repo, own venv, own
-`CLAUDE.md`). Runs on the **M2 MacBook Air** (not the RTX PC — see §0).
+Location: `/Users/cs/ClaudeCode/forge-narrator/`. Runs on the **M2 MacBook Air**.
 
----
-
-## 0. Findings from the proof-of-concept (already measured — do not re-derive)
-
-A working POC exists in `poc/` and these facts are established:
-
-- **Aligner = whispermlx** (an MLX/Apple-Silicon fork of WhisperX), NOT vanilla
-  WhisperX, and NOT the RTX PC. It runs on the M2 Air's GPU via MLX, installs
-  cleanly on Python 3.11, and was ~27% faster than CPU WhisperX on the test clip
-  (26.4s vs 36.0s warm, identical 393-word output). This **collapses the whole
-  tool to one machine** — there is no longer a two-machine split.
-- **Voice = Brian, engine = generative, region = eu-west-2.** Quality approved.
-- **SSML `<break>` and `<prosody rate>` are honoured** by Brian-generative
-  (confirmed audibly, not just accepted). So the SSML path is GO — the manifest
-  carries full SSML and the generator sends it as `TextType="ssml"`.
-- **Measured Polly throughput: ~19 seconds per 1,000 characters** (generative is
-  the slow engine). Serial, the full ~3.87M-char archive is ~20 hours; this is
-  the pipeline bottleneck, NOT alignment. **Synthesis MUST be parallelised**
-  (see §3) to bring wall-clock down to a few hours.
-- **Measured cost: ~$0.055 per 1,831 chars** → ~$116 for the full archive
-  (generative $30/M). Cost guard rails still required (§3).
-- **ffmpeg is a hard dependency** (Homebrew `ffmpeg`); without it torchcodec
-  fails to load and mp3 decode/concat is unreliable. The POC confirmed this.
-
-The POC seed files in `poc/`:
-- `align_mlx.py` — working whispermlx alignment (adapt into the pipeline).
-- `polly_probe.py` — working Polly synth + timing (adapt into the synth step).
-- `player.html` — the proven sync checker; use it to VALIDATE generator output.
-- `speech_*.mp3`, `sample.marks.mlx.json`, `sample_text.txt` — test fixtures.
+> **STATUS: this is now a CHANGE spec.** forge-narrator was already built and
+> validated against Polly + whispermlx (26 tests, end-to-end run on the Junior
+> fixture). The decision is to **switch the provider from Amazon Polly to
+> ElevenLabs**, which also **removes the whole alignment stage**. Most of the
+> pipeline (manifest, hashing, cache, stitch, blocks.json, CLI, guard rails)
+> stays; `synth.py` is rewritten and `align.py` is deleted. Sections below are
+> marked CHANGE / DELETE / UNCHANGED.
 
 ---
 
-## 1. What it does (end to end)
+## 0. Why the change
+
+A/B test on real Junior prose: ElevenLabs is clearly higher quality than Polly
+generative (Brian). Decisively better, operator-confirmed. Crucially, ElevenLabs'
+`/with-timestamps` endpoint returns **character-level timing alongside the audio
+in one call** — the Speech-Marks capability Polly generative lacked, which is the
+only reason whispermlx existed. So switching providers also **deletes the entire
+alignment stage**: the pipeline gets simpler, not more complex.
+
+Proven in the POC: `poc/elevenlabs_probe.py` already calls `/with-timestamps`,
+captures `normalized_alignment`, and groups characters → words in the exact
+`marks.json` format the player consumes. Use it as the seed for the new `synth.py`.
+
+---
+
+## 1. What it does (end to end) — CHANGED
 
 ```
 manifest.zip (from NotebookForge)
    │
-   1. unzip → manifest.json  (blocks[].ssml + hash, voice, engine)
+   1. unzip → manifest.json  (blocks[].ssml + hash, voice, model)
    │
-   2. per block:
-        cache hit by hash?  → reuse cached block .mp3
-        miss                → Polly SynthesizeSpeech (Brian, generative,
-                              eu-west-2) → block .mp3 → cache by hash
+   2. per block (PARALLEL):
+        cache hit by hash?  → reuse cached block .mp3 + block .marks
+        miss → ElevenLabs POST /v1/text-to-speech/{voice_id}/with-timestamps
+                 → block .mp3  +  normalized_alignment (char timings)
+                 → group chars→words → block-local word marks
+                 → cache both by hash
    │
    3. stitch block mp3s in order → document.mp3
-        record cumulative time offset per block
+        record each block's cumulative start offset
    │
-   4. whispermlx forced alignment (MLX/GPU) on document.mp3
-        + the known transcript (from blocks) → document.marks.json
+   4. assemble document.marks.json:
+        for each block in order, shift its block-local word times by the
+        block's stitch offset → flat [{word,start,end}] in document time
    │
-   5. emit document.blocks.json (block order, text, char + time spans)
+   5. emit document.blocks.json (block order, text, word + time spans, highlightable)
    │
    6. write all three into out/{slug}/  (operator uploads to S3)
 ```
 
+No alignment step. No transcript step. Timing is a by-product of synthesis.
+
 ---
 
-## 2. Tech / environment
-
-### 2.0 SSML — already verified (GATE PASSED)
-The SSML gating question is **resolved**: Brian-generative audibly honours
-`<break>` and `<prosody rate>` (heading prosody confirmed excellent in the POC).
-Build the **SSML path**: the manifest carries full SSML, the generator sends it
-as `TextType="ssml"`. No need to re-run the probe; `poc/polly_probe.py --ssml`
-is the evidence. Record this in `SSML_FINDINGS.md` for the record.
+## 2. Tech / environment — CHANGED
 
 ### 2.1 Stack
-- **Python 3.11** (proven: whispermlx + mlx install cleanly on 3.11; 3.9 too old).
-- `boto3` for Polly. AWS creds via standard chain (`~/.aws`), NEVER in code.
-  (Already configured on the Air as user `PollyAPI-user` with
-  `AmazonPollyFullAccess`.)
-- **`whispermlx`** for alignment (the MLX fork — `pip install whispermlx`).
-  Runs on the M2 GPU via MLX unified memory. The `device="cpu"` argument in its
-  API is vestigial; MLX uses the GPU regardless. Default model `small.en`
-  (proven: 393 words, no drift); `medium.en` available for tricky documents.
-- **`ffmpeg`** — HARD dependency, install via Homebrew (`brew install ffmpeg`).
-  Already installed on the Air (v8.x). Used for mp3 decode + concat stitching.
-  Without it, torchcodec fails to load.
-- Adapt `poc/align_mlx.py` for the alignment step rather than writing fresh.
+- **Python 3.11** (unchanged).
+- **HTTP to ElevenLabs** — no SDK needed; stdlib `urllib` works (the POC probe
+  uses it). `requests` is fine too if preferred. **Remove `boto3`.**
+- **Remove `whispermlx` / `mlx` / `torch`** entirely — no aligner. This drops the
+  heaviest dependencies and the model-download step.
+- **`ffmpeg`** — STILL a hard dependency (mp3 decode + concat stitching). Already
+  installed on the Air.
+- **API key** via env var `ELEVENLABS_API_KEY`, read from a local gitignored file
+  if needed (the POC reads `/Users/cs/Documents/Claude/tts-test/.elevenlabs_key`).
+  NEVER hardcode; never log the key.
+
+### 2.2 SSML — must be re-verified for ElevenLabs
+**Do NOT assume Polly's SSML carries over.** ElevenLabs does NOT honour
+`<prosody>`, and its `<break>` handling differs (it supports `<break time="..."/>`
+on some models but discourages overuse; expressiveness is model-driven). So:
+- First task of this change: a tiny probe — synthesise a heading + paragraph with
+  the manifest's SSML through the chosen ElevenLabs voice/model, listen, and
+  record what's honoured in `SSML_FINDINGS.md` (overwrite the Polly findings).
+- The manifest's SSML dialect is decided in Spec A; the two specs must agree.
+  Likely outcome: lighter SSML (maybe just `<break>` between blocks, or plain
+  text with the generator relying on per-block synthesis for pacing). Confirm,
+  don't guess.
+- The inter-block break is **no longer load-bearing** for word→block mapping
+  (that now comes from per-block synthesis — see Overview). Keep a small seam
+  silence if it helps stitching not clip; otherwise SSML is purely for prosody.
 
 ---
 
-## 3. Polly call (per uncached block)
+## 3. ElevenLabs call (per uncached block) — REPLACES the Polly section
 
-```python
-polly.synthesize_speech(
-    Text=block["ssml"],
-    TextType="ssml",                 # SSML confirmed working on generative
-    OutputFormat="mp3",
-    VoiceId=manifest["voice"],       # Brian
-    Engine=manifest["engine"],       # generative
-)
+```
+POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/with-timestamps
+  headers: xi-api-key: $ELEVENLABS_API_KEY,  Content-Type: application/json
+  body: { "text": <block ssml or text>, "model_id": "eleven_v3" }
+  → 200: { audio_base64, alignment, normalized_alignment }
 ```
 
-Region: `eu-west-2` (London — Brian generative available there).
+- Decode `audio_base64` → block mp3.
+- Use **`normalized_alignment`** (matches spoken output). Group its `characters`
+  + `character_start_times_seconds` + `character_end_times_seconds` into words:
+  split on whitespace; word.start = first char start, word.end = last char end.
+  (Exact logic already in `poc/elevenlabs_probe.py::group_chars_to_words`.)
+- Voice id + model come from the manifest (`voice`, `model`); region N/A.
 
-### 3a. PARALLELISE — this is the performance-critical requirement
-Measured throughput is ~19s per 1,000 chars; serial, the archive is ~20 hours.
-Blocks are independent, so synthesise them **concurrently** (thread pool or async,
-e.g. 8–10 in flight). This brings wall-clock to a few hours. Respect Polly's
-rate limits / throttling — back off and retry on `ThrottlingException` rather
-than failing the run. Do NOT synthesise serially.
+### 3a. PARALLELISE — still required
+Synthesise blocks concurrently (thread pool, ~5–10 in flight). ElevenLabs has
+per-tier concurrency limits (Free/Starter low; Creator/Pro higher) — make
+concurrency configurable and back off on HTTP 429 rather than failing the run.
 
-### 3b. Guard rails
-- Before running, print total character count across UNCACHED blocks and the
-  estimated cost (generative = $30 / 1M chars; ~$0.055 per 1.8k chars measured)
-  and require a `--yes` flag or
-  interactive confirm. Prevents a surprise bill.
-- Respect a configurable monthly character cap; refuse beyond it.
-- If a generative block errors (rare model hallucination / emergency stop per
-  AWS docs), retry once, then surface the block index and stop cleanly.
-
-NOTE: generative does NOT emit Speech Marks — do not request them; WhisperX
-provides word timing.
-
----
-
-## 4. Caching (why regeneration is cheap)
-
-A local cache dir, e.g. `cache/{hash}.mp3`. The hash is provided by the manifest
-(`sha256(ssml + voice + engine)`), so:
-- Re-running after a small NotebookForge edit re-synthesises only the blocks
-  whose text/SSML changed; everything else is a cache hit.
-- Cache never expires; it's keyed by content. Safe to keep indefinitely.
-- A `--no-cache` flag forces full regen if ever needed.
+### 3b. Guard rails — CHANGED to ElevenLabs credit model
+- Billing: **1 character = 1 credit** on Multilingual v2/v3. Estimate cost from
+  uncached character count. Full archive ≈ 3.87M chars; chosen path is
+  fast-and-overage on a paid tier (~$390–450). `estimate` prints char count and
+  credit cost; `generate` requires `--yes` / interactive confirm.
+- Respect a configurable character cap; refuse beyond it.
+- On block error: retry once (with backoff on 429), then surface the block index
+  and stop cleanly.
 
 ---
 
-## 5. Stitching + offsets
-
-Concatenate block mp3s in manifest order into `document.mp3` (ffmpeg concat).
-While stitching, accumulate each block's start/end time. This offset table feeds
-`document.blocks.json` (§7) and lets the player map blocks→time without trusting
-the aligner for block boundaries.
-
-Since SSML `<break>` is confirmed working (§2.0), pacing comes from the SSML
-itself; no generator-inserted silence is needed. (If ever switching to plain
-text, insert fixed silence — 500 ms paragraph / 700 ms heading — here.)
+## 4. Caching — UNCHANGED (but cache the marks too)
+`cache/{hash}.mp3` keyed by `sha256(ssml + voice + model)`. **Also cache the
+block-local word marks** (`cache/{hash}.marks.json`) so a cached block contributes
+its timing on re-run without re-calling the API. Hash must include the model id
+(and voice) so changing either invalidates correctly. `--no-cache` forces regen.
 
 ---
 
-## 6. whispermlx alignment
-
-Run forced alignment on the stitched `document.mp3` using the **known
-transcript** assembled from the blocks' plain text (transcript-constrained
-alignment — more robust than blind transcription on proper nouns like
-"Nui Dat", "Nuitat", ranks, etc.).
-
-Output `document.marks.json` = flat `[{word, start, end}]` in seconds — exactly
-the POC format that already worked (`poc/sample.marks.mlx.json` is a real
-example). whispermlx uses the M2 GPU via MLX automatically.
-
-Model: default `small.en`; allow `--model medium.en` for tricky documents.
-(POC showed `small.en` aligned 393 words with no drift.)
+## 5. Stitching + offsets — UNCHANGED
+ffmpeg concat block mp3s in manifest order → `document.mp3`, accumulating each
+block's cumulative start offset. These offsets shift block-local word times into
+document-global time (§1 step 4) and feed `document.blocks.json`.
 
 ---
 
-## 7. document.blocks.json (player render source)
+## 6. Word timing — REPLACES the whispermlx section (DELETE align.py)
+There is no alignment. `document.marks.json` is assembled by concatenating each
+block's word marks in order, each shifted by that block's stitch offset. Format
+is the same flat `[{word,start,end}]` in seconds — byte-compatible with the POC
+player. **Delete `align.py`, the whispermlx dependency, and the alignment tests**
+(replace with tests that the char→word grouping + offset-shift produce correct
+monotonic marks).
 
+---
+
+## 7. document.blocks.json — UNCHANGED
 ```json
 [
-  { "index": 0, "type": "heading",
-    "text": "The boy I once knew but now remember",
-    "word_start": 0, "word_end": 7,
-    "time_start": 0.0, "time_end": 3.1 },
-  { "index": 1, "type": "paragraph",
-    "text": "Junior hurries down the hill …",
-    "word_start": 7, "word_end": 96,
-    "time_start": 3.1, "time_end": 47.8 }
+  { "index": 0, "type": "heading", "text": "…",
+    "word_start": 0, "word_end": 7, "time_start": 0.0, "time_end": 3.1,
+    "highlightable": true },
+  { "index": 1, "type": "footnote", "text": "…",
+    "word_start": 96, "word_end": 110, "time_start": 47.8, "time_end": 55.0,
+    "highlightable": false }
 ]
 ```
-
-`word_start`/`word_end` index into `marks.json` (the running word index — the
-sacred invariant from the Overview). `time_*` come from the stitch offsets.
-The player renders text from this file and highlights words via marks.
+`word_*` index into `marks.json`; `time_*` from stitch offsets; `highlightable`
+false for footnotes (see Overview "Footnotes"). Unchanged by the provider switch.
 
 ---
 
-## 8. CLI shape
-
+## 8. CLI shape — UNCHANGED
 ```
-forge-narrator generate manifest.zip --out ./out [--yes] [--model small.en] [--no-cache]
-forge-narrator estimate manifest.zip        # chars + cost, no API calls
+forge-narrator generate manifest.zip --out ./out [--yes] [--no-cache] [--concurrency N]
+forge-narrator estimate manifest.zip        # chars + credit cost, no API calls
 ```
-
-`generate` writes `out/{slug}/document.mp3`, `document.marks.json`,
-`document.blocks.json`. The operator uploads that folder to S3 and pastes the
-base URL into NotebookForge.
-
-(v1: the tool writes a local folder; it does NOT upload to S3 itself. Keeps AWS
-write creds out of scope and the operator in control. A later `--upload`
-option can add S3 PutObject if wanted.)
+(`--model` for whisper is gone; add `--concurrency` instead.)
 
 ---
 
-## 9. Build order
-1. Project scaffold, venv (3.11), requirements (boto3, whisperx, ffmpeg present).
-2. Manifest reader + `estimate` command (no API calls) — verify parsing first.
-3. Polly per-block synth + hash cache.
-4. ffmpeg stitch + offset table.
-5. WhisperX alignment (reuse the POC `align.py` logic) → marks.json.
-6. blocks.json emitter.
-7. `generate` end-to-end on the real Junior manifest; compare against the POC
-   player to confirm the three-file contract renders correctly.
-8. Cost guard rails + confirmation.
+## 9. Change order (for the switch)
+1. Add `poc/elevenlabs_probe.py` to the repo's POC seeds (done in tts-test).
+2. SSML re-verification probe → `SSML_FINDINGS.md` (overwrite Polly findings).
+3. Rewrite `synth.py`: ElevenLabs `/with-timestamps`, char→word grouping, cache
+   mp3 + marks. Remove boto3.
+4. Delete `align.py` + whispermlx dep + alignment tests.
+5. Rewrite `pipeline.py` marks assembly: concat block marks shifted by offsets
+   (replaces the align call).
+6. Update `cost.py` + `cli.py` guard rails to the credit model; add `--concurrency`.
+7. Update tests (char→word grouping, offset-shift monotonicity, cache-with-marks).
+8. End-to-end `generate` on the Junior fixture; validate with `poc/player.html`.
+9. Update `CLAUDE.md` + README to ElevenLabs; drop Polly/whispermlx references.
 
 ## 10. Reuse from the POC
-The working alignment code is at `/Users/cs/Documents/Claude/tts-test/align.py`
-and the player at `.../player.html`. The marks.json format is already proven;
-keep it byte-compatible so the POC player can validate generator output.
+`poc/elevenlabs_probe.py` — the working `/with-timestamps` call + `group_chars_to_words`.
+`poc/player.html` — the sync checker; validate generator output against it.
+The marks.json format is proven; keep it byte-compatible.
 
 ## 11. Constraints
-- AWS credentials only via the standard chain; NEVER written to disk by the tool.
-- Cost confirmation mandatory before any paid Polly call.
-- Deterministic: same manifest in → same files out (modulo Polly's own
-  generative variation, which is inherent to the engine).
+- ElevenLabs key only via env/local gitignored file; NEVER hardcoded or logged.
+- Cost confirmation mandatory before any paid call.
+- No `git add -A`; stage explicit paths; don't push unless asked.
+
+## 12. Model = eleven_v3 (RESOLVED — supersedes the earlier "v3 deferred" note)
+**Decision: synthesise on `eleven_v3`.** The earlier version of this section
+deferred v3 on the belief that v3 could not return word timings — that belief was
+wrong. Validated directly: `eleven_v3` **does** return per-character timing via
+`/with-timestamps` (HTTP 200, full populated `alignment`, monotonic; gap-variance
+analysis confirms genuine acoustic alignment, not uniform interpolation). So v3
+gives the better voice quality AND native word timing in one call — no
+forced-alignment stage, no two-stage pipeline.
+
+Consequences:
+- **`whispermlx` / `align_mlx.py` are no longer needed at all.** They existed only
+  as the contingency for "if we ever pick v3 we'll need to recover timings." v3
+  emits timings natively, so that contingency is closed; `poc/align_mlx.py` can be
+  retired.
+- The cache hash includes the model id, so switching from any earlier model to
+  `eleven_v3` invalidates every block → a one-time full regeneration (correct).
+
+**Audio / delivery tags (v3).** v3 honours bracketed delivery cues. Tested on the
+memoir prose:
+- `[pause]` produced a real ~1s gap and `[reflective]` softened the delivery —
+  both behaved well and are usable, sparingly, where the prose warrants it.
+- **`[Australian accent]` was tested and REJECTED.** Its effect is
+  non-deterministic and decays within a generation (honoured on the first
+  sentence, dropped on the next; a fixed seed did not fix it). Do not build any
+  accent device on tags — accent is a property of the chosen voice, not a tag.
+- Whether to emit any delivery tags in the manifest at all is a Spec A / SSML
+  decision, verified in `SSML_FINDINGS.md`. Keep any tag vocabulary light and
+  curated; the model stays isolated behind a `synth.py` parameter.
+
+**Voice locked: `fjnwTZkKtQOJaYzGLa6n`** (gscOrkde and George dropped).

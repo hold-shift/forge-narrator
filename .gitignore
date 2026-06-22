@@ -1,4 +1,5 @@
 SSML_FINDINGS.md
+.elevenlabs_key
 out/
 cache/
 *.mp3

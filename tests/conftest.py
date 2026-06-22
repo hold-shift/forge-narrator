@@ -14,8 +14,8 @@ if str(SRC) not in sys.path:
 
 from forge_narrator.hashing import block_hash  # noqa: E402
 
-VOICE = "Brian"
-ENGINE = "generative"
+VOICE = "fjnwTZkKtQOJaYzGLa6n"   # locked ElevenLabs voice
+MODEL = "eleven_v3"
 
 
 def make_block(index: int, btype: str, text: str, ssml: str) -> dict:
@@ -24,26 +24,26 @@ def make_block(index: int, btype: str, text: str, ssml: str) -> dict:
         "type": btype,
         "text": text,
         "ssml": ssml,
-        "hash": block_hash(ssml, VOICE, ENGINE),
+        "hash": block_hash(ssml, VOICE, MODEL),
     }
 
 
 @pytest.fixture
 def manifest_dict() -> dict:
     """A minimal valid manifest: one heading + two paragraphs."""
+    # eleven_v3 dialect: plain-text block payloads (no tags). The 'ssml' field is
+    # the spoken text itself.
     blocks = [
-        make_block(0, "heading", "A Heading", "<speak>A Heading<break time='400ms'/></speak>"),
-        make_block(1, "paragraph", "First paragraph here.",
-                   "<speak>First paragraph here.<break time='500ms'/></speak>"),
-        make_block(2, "paragraph", "Second paragraph follows.",
-                   "<speak>Second paragraph follows.<break time='500ms'/></speak>"),
+        make_block(0, "heading", "A Heading", "A Heading"),
+        make_block(1, "paragraph", "First paragraph here.", "First paragraph here."),
+        make_block(2, "paragraph", "Second paragraph follows.", "Second paragraph follows."),
     ]
     return {
         "version": 1,
         "slug": "test-doc",
         "title": "Test Doc",
         "voice": VOICE,
-        "engine": ENGINE,
+        "model": MODEL,
         "blocks": blocks,
     }
 

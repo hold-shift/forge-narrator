@@ -1,8 +1,11 @@
-"""End-to-end generate pipeline (Spec B §1): synth → stitch → align → emit.
+"""End-to-end generate pipeline (Spec B §1): synth → stitch → assemble → emit.
 
 Writes ``out/{slug}/`` containing the three S3-contract files:
 ``document.mp3``, ``document.marks.json``, ``document.blocks.json`` — all sharing
 one word ordering (the sacred invariant). The operator uploads that folder to S3.
+
+There is no alignment stage: word timing is a by-product of ElevenLabs synthesis,
+assembled by concatenating each block's marks shifted by its stitch offset.
 """
 
 from __future__ import annotations
@@ -28,8 +31,7 @@ def generate(
     cache: BlockCache,
     *,
     out_root: Path,
-    model: str = "small.en",
-    concurrency: int = 9,
+    concurrency: int = 8,
 ) -> Path:
     """Run the full pipeline and return the output directory."""
     # Fail fast on the hard dependency before doing any paid work.
@@ -38,37 +40,34 @@ def generate(
     out_dir = Path(out_root) / manifest.slug
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1–2. Synthesise (cache-aware, parallel). Imported here to keep estimate light.
+    # 1–2. Synthesise (cache-aware, parallel). Imported lazily to keep estimate light.
     from .synth import synthesise
 
-    print("[1/4] Synthesising blocks (Polly, cached by hash)…")
+    print("[1/3] Synthesising blocks (ElevenLabs /with-timestamps, cached by hash)…")
     result = synthesise(manifest, cache, concurrency=concurrency, progress=_progress)
     print(f"      {result.from_cache} from cache, {result.synthesised} synthesised.")
 
     # 3. Stitch + offset table.
     from .stitch import stitch
 
-    print("[2/4] Stitching → document.mp3…")
+    print("[2/3] Stitching → document.mp3…")
     mp3_path = out_dir / "document.mp3"
     offsets = stitch(manifest, cache, mp3_path)
 
-    # 4. Forced alignment → marks (+ exact word→block ranges).
-    from .align import align_document
-
-    print(f"[3/4] Aligning with whispermlx ({model})…")
-    aligned = align_document(mp3_path, manifest, offsets, model=model)
-    print(f"      {len(aligned.marks)} words aligned.")
-
-    # 5–6. Emit blocks.json + write marks.json.
+    # 4–5. Assemble marks (concat block marks shifted by offsets) + blocks.json.
     from .blocks_json import build_blocks_json
+    from .marks import assemble_document_marks
 
-    print("[4/4] Writing marks.json + blocks.json…")
+    print("[3/3] Assembling marks.json + blocks.json…")
+    marks, word_ranges = assemble_document_marks(manifest, cache, offsets)
+    print(f"      {len(marks)} words across {len(manifest.blocks)} blocks.")
+
     marks_path = out_dir / "document.marks.json"
     blocks_path = out_dir / "document.blocks.json"
     marks_path.write_text(
-        json.dumps(aligned.marks, indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps(marks, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    blocks = build_blocks_json(manifest, offsets, aligned)
+    blocks = build_blocks_json(manifest, offsets, word_ranges)
     blocks_path.write_text(
         json.dumps(blocks, indent=2, ensure_ascii=False), encoding="utf-8"
     )

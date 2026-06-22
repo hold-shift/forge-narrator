@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Build a small, valid manifest fixture from the POC sample prose.
 
-Produces ``manifest.json`` and ``manifest.zip`` next to this file. The SSML mirrors
-what NotebookForge would emit (heading gets prosody + breaks; paragraphs get a
-trailing break), and each block's hash is computed with the canonical recipe so
-the fixture passes ``load_manifest``'s integrity check.
+Produces ``manifest.json`` and ``manifest.zip`` next to this file, in the
+ElevenLabs manifest dialect: **plain text** blocks (no `<speak>`/`<break>`/
+`<prosody>` — `eleven_v3` leaks unknown tags into the audio and the alignment;
+see docs/SSML_FINDINGS.md), the locked voice id and ``eleven_v3``. Each block's
+hash uses the canonical recipe so the fixture passes ``load_manifest``'s check.
 
     python tests/fixtures/build_fixture.py
 """
@@ -21,8 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from forge_narrator.hashing import block_hash  # noqa: E402
 
-VOICE = "Brian"
-ENGINE = "generative"
+VOICE = "fjnwTZkKtQOJaYzGLa6n"   # locked ElevenLabs voice
+MODEL = "eleven_v3"
 SLUG = "junior-sample"
 TITLE = "Junior (sample)"
 
@@ -41,43 +42,25 @@ PARAGRAPHS = [
 ]
 
 
-def esc(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def heading_ssml(text: str) -> str:
-    return (
-        f"<speak><break time='700ms'/>"
-        f"<prosody rate='95%'>{esc(text)}</prosody>"
-        f"<break time='400ms'/></speak>"
-    )
-
-
-def paragraph_ssml(text: str) -> str:
-    return f"<speak>{esc(text)}<break time='500ms'/></speak>"
-
-
 def build_manifest() -> dict:
-    blocks = []
-    specs = [("heading", HEADING, heading_ssml(HEADING))]
-    for para in PARAGRAPHS:
-        specs.append(("paragraph", para, paragraph_ssml(para)))
+    # eleven_v3 dialect: the block payload is plain text (no tags). Pacing between
+    # blocks comes from per-block synthesis + the stitch seam.
+    specs = [("heading", HEADING)] + [("paragraph", p) for p in PARAGRAPHS]
 
-    for i, (btype, _text, ssml) in enumerate(specs):
-        # Mirror the real NotebookForge export: SSML only, no plain text. The
-        # generator derives readable text from the SSML.
+    blocks = []
+    for i, (btype, text) in enumerate(specs):
         blocks.append({
             "index": i,
             "type": btype,
-            "ssml": ssml,
-            "hash": block_hash(ssml, VOICE, ENGINE),
+            "ssml": text,   # plain text for ElevenLabs
+            "hash": block_hash(text, VOICE, MODEL),
         })
 
     return {
         "document_slug": SLUG,
         "title": TITLE,
         "voice": VOICE,
-        "engine": ENGINE,
+        "model": MODEL,
         "blocks": blocks,
     }
 
@@ -96,7 +79,7 @@ def main() -> None:
     print(f"Wrote {json_path}")
     print(f"Wrote {zip_path}")
     print(f"{len(manifest['blocks'])} blocks, "
-          f"{sum(len(b['ssml']) for b in manifest['blocks']):,} SSML chars")
+          f"{sum(len(b['ssml']) for b in manifest['blocks']):,} characters")
 
 
 if __name__ == "__main__":

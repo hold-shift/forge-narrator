@@ -6,11 +6,10 @@ to ``document.mp3`` in a single pass. Offsets are accumulated from the exact WAV
 durations, so the offset table sits on the same timeline as the final mp3 (no
 per-segment mp3 padding drift accumulating across hundreds of blocks).
 
-Pacing comes from the SSML ``<break>`` tags inside each block (confirmed working),
-so no generator-inserted silence is needed (§5).
-
-The offset table feeds document.blocks.json and lets word→block assignment use
-clean time windows (the ≥400ms breaks between blocks give unambiguous gaps).
+Each block's start offset shifts that block's word marks into document-global
+time (see ``marks.assemble_document_marks``) and feeds ``document.blocks.json``.
+Word→block mapping is by construction (per-block synthesis), not from these
+offsets — they only provide the time axis.
 """
 
 from __future__ import annotations
@@ -23,8 +22,7 @@ from .cache import BlockCache
 from .ffmpeg import probe_duration, require_ffmpeg, run
 from .manifest import Manifest
 
-# Canonical intermediate PCM format. 24 kHz mono is ample for speech and matches
-# the generative voice's effective bandwidth.
+# Canonical intermediate PCM format. 24 kHz mono is ample for speech.
 _SR = 24000
 
 

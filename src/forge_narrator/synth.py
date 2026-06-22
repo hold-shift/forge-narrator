@@ -1,36 +1,51 @@
-"""Polly synthesis — parallel, cached, with throttle backoff (Spec B §3).
+"""ElevenLabs synthesis — parallel, cached, with 429 backoff (Spec B §3).
 
-Each uncached block is synthesised with Brian / generative / eu-west-2 and stored
-in the content-addressed cache. Blocks are independent, so we run 8–10 concurrently
-(serial would be ~20 h for the full archive). Throttling is retried with backoff;
-a genuine synthesis error is retried once, then the run stops cleanly with the
-offending block index (Spec B §3b).
+Each uncached block is POSTed to ``/v1/text-to-speech/{voice_id}/with-timestamps``
+with ``model_id`` from the manifest. The response carries the audio AND
+per-character timing in one call, so there is no alignment stage: we group the
+characters into block-local word marks and cache both the mp3 and the marks.
 
-Generative voices do NOT emit Speech Marks — we never request them; whispermlx
-provides word timing downstream.
+Blocks are independent, so they are synthesised concurrently (configurable, ~5–10
+in flight). HTTP 429 is retried with backoff (never fails the run); a genuine
+error is retried once, then the run stops cleanly with the offending block index.
+
+The API key comes from ``ELEVENLABS_API_KEY`` or a local gitignored key file. It
+is NEVER hardcoded and NEVER logged.
 """
 
 from __future__ import annotations
 
+import base64
+import json
+import os
 import time
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from pathlib import Path
 
 from .cache import BlockCache
-from .chunk import split_ssml_for_polly
-from .ffmpeg import concat_mp3_bytes
 from .manifest import Block, Manifest
+from .marks import group_chars_to_words
 
-REGION = "eu-west-2"
+API_ROOT = "https://api.elevenlabs.io/v1"
 
-# Throttle backoff: exponential with a cap. ThrottlingException is expected under
-# concurrency and must NOT fail the run.
+# Local gitignored key-file fallbacks, in order (env var is tried first). The key
+# VALUE never lives in source — only these paths.
+_KEY_FILES = (
+    Path(".elevenlabs_key"),
+    Path.home() / "ClaudeCode/forge-narrator/.elevenlabs_key",
+    Path("/Users/cs/Documents/Claude/tts-test/.elevenlabs_key"),
+)
+
+# 429 backoff: exponential with a cap. Throttling must NOT fail the run.
 _MAX_THROTTLE_RETRIES = 6
 _BACKOFF_BASE = 1.5
 _BACKOFF_CAP = 30.0
-
-# Non-throttle synthesis errors get exactly one retry, then we stop (§3b).
+# Non-429 errors get exactly one retry, then we stop (§3b).
 _SYNTH_RETRIES = 1
+_TIMEOUT = 300  # seconds per request
 
 
 class SynthesisError(Exception):
@@ -39,82 +54,116 @@ class SynthesisError(Exception):
 
 @dataclass
 class SynthResult:
-    synthesised: int   # blocks that hit Polly
+    synthesised: int   # blocks that hit the API
     from_cache: int    # blocks served from cache
 
 
-def _make_client():
-    try:
-        import boto3
-    except ImportError as e:
-        raise SynthesisError("boto3 not installed (pip install boto3)") from e
-    return boto3.client("polly", region_name=REGION)
+def get_api_key() -> str:
+    """Return the ElevenLabs key from env or a local gitignored file.
+
+    Never returns/raises the key value. Raises ``SynthesisError`` (with guidance,
+    not the key) if none is found.
+    """
+    key = os.environ.get("ELEVENLABS_API_KEY")
+    if key and key.strip():
+        return key.strip()
+    for f in _KEY_FILES:
+        try:
+            if f.is_file():
+                content = f.read_text(encoding="utf-8").strip()
+                if content:
+                    return content
+        except OSError:
+            continue
+    raise SynthesisError(
+        "ELEVENLABS_API_KEY not set and no local key file found. "
+        "Set the env var or create .elevenlabs_key (gitignored)."
+    )
 
 
-def _is_throttle(exc: Exception) -> bool:
-    name = exc.__class__.__name__
-    if name in ("ThrottlingException", "TooManyRequestsException"):
-        return True
-    # botocore ClientError carries the code in its response.
-    code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
-    return code in ("ThrottlingException", "TooManyRequestsException")
+def _request(voice_id: str, model: str, text: str, key: str) -> dict:
+    """One POST to /with-timestamps. Returns the parsed JSON or raises HTTPError."""
+    url = f"{API_ROOT}/text-to-speech/{voice_id}/with-timestamps"
+    body = json.dumps({"text": text, "model_id": model}).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("xi-api-key", key)
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Accept", "application/json")
+    with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+        return json.loads(r.read())
 
 
-def _polly_call(client, manifest: Manifest, ssml: str, block_index: int) -> bytes:
-    """One Polly SynthesizeSpeech call, retrying throttles (backoff) and one error."""
+def _synthesise_one(voice_id: str, model: str, block: Block, key: str) -> tuple[bytes, list[dict]]:
+    """Synthesise one block → (mp3 bytes, block-local word marks).
+
+    Retries 429 with backoff; retries one other error; then stops. Auth failures
+    fail fast. Error messages carry the block index + HTTP status, never the key.
+    """
     throttle_tries = 0
     hard_tries = 0
     while True:
         try:
-            resp = client.synthesize_speech(
-                Text=ssml,
-                TextType="ssml",
-                OutputFormat="mp3",
-                VoiceId=manifest.voice,
-                Engine=manifest.engine,
+            out = _request(voice_id, model, block.ssml, key)
+            audio = base64.b64decode(out["audio_base64"])
+            al = out.get("normalized_alignment") or out.get("alignment")
+            if not al:
+                raise SynthesisError(f"block {block.index}: response had no alignment")
+            marks = group_chars_to_words(
+                al["characters"],
+                al["character_start_times_seconds"],
+                al["character_end_times_seconds"],
             )
-            return resp["AudioStream"].read()
-        except Exception as e:  # noqa: BLE001 — classify below
-            if _is_throttle(e):
+            return audio, marks
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
                 throttle_tries += 1
                 if throttle_tries > _MAX_THROTTLE_RETRIES:
                     raise SynthesisError(
-                        f"block {block_index}: still throttled after "
+                        f"block {block.index}: still rate-limited (429) after "
                         f"{_MAX_THROTTLE_RETRIES} retries"
-                    ) from e
-                delay = min(_BACKOFF_CAP, _BACKOFF_BASE ** throttle_tries)
+                    ) from None
+                retry_after = e.headers.get("Retry-After")
+                delay = (float(retry_after) if retry_after and retry_after.isdigit()
+                         else min(_BACKOFF_CAP, _BACKOFF_BASE ** throttle_tries))
                 time.sleep(delay)
                 continue
+            if e.code in (401, 403):
+                raise SynthesisError(
+                    f"block {block.index}: authentication failed (HTTP {e.code}) — "
+                    "check ELEVENLABS_API_KEY"
+                ) from None
+            hard_tries += 1
+            detail = _safe_detail(e)
+            if hard_tries > _SYNTH_RETRIES:
+                raise SynthesisError(f"block {block.index}: HTTP {e.code} {detail}") from None
+            time.sleep(1.0)
+        except (urllib.error.URLError, TimeoutError) as e:
             hard_tries += 1
             if hard_tries > _SYNTH_RETRIES:
-                raise SynthesisError(f"block {block_index}: {e}") from e
-            # one quick retry for transient/model errors
+                raise SynthesisError(f"block {block.index}: network error: {e}") from None
             time.sleep(1.0)
 
 
-def _synthesise_one(client, manifest: Manifest, block: Block) -> bytes:
-    """Synthesise one block, splitting over-long SSML across calls and rejoining."""
+def _safe_detail(e: urllib.error.HTTPError) -> str:
+    """Short error body for diagnostics (ElevenLabs never echoes the key)."""
     try:
-        chunks = split_ssml_for_polly(block.ssml)
-    except ValueError as e:
-        raise SynthesisError(f"block {block.index}: {e}") from e
-    parts = [_polly_call(client, manifest, c, block.index) for c in chunks]
-    return concat_mp3_bytes(parts)
+        return e.read().decode("utf-8", "replace")[:200]
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def synthesise(
     manifest: Manifest,
     cache: BlockCache,
     *,
-    concurrency: int = 9,
+    concurrency: int = 8,
     progress=None,
 ) -> SynthResult:
-    """Ensure every block's audio is in the cache, synthesising the misses.
+    """Ensure every block's audio + marks are cached, synthesising the misses.
 
     ``progress`` (optional) is called with ``(done, total)`` after each block.
-    Returns counts. Raises ``SynthesisError`` on the first unrecoverable failure
-    (after cancelling pending work) so the operator can fix and re-run — cached
-    blocks make the re-run cheap.
+    Raises ``SynthesisError`` on the first unrecoverable failure (after cancelling
+    pending work) so the operator can fix and re-run — cached blocks make it cheap.
     """
     todo = [b for b in manifest.blocks if not cache.has(b.hash)]
     from_cache = len(manifest.blocks) - len(todo)
@@ -126,16 +175,19 @@ def synthesise(
     if not todo:
         return SynthResult(synthesised=0, from_cache=from_cache)
 
-    client = _make_client()
+    key = get_api_key()  # fail fast (and before spending) if missing
     workers = max(1, min(concurrency, len(todo)))
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_synthesise_one, client, manifest, b): b for b in todo}
+        futures = {
+            pool.submit(_synthesise_one, manifest.voice, manifest.model, b, key): b
+            for b in todo
+        }
         try:
             for fut in as_completed(futures):
                 block = futures[fut]
-                audio = fut.result()  # re-raises SynthesisError
-                cache.put(block.hash, audio)
+                audio, marks = fut.result()  # re-raises SynthesisError
+                cache.put(block.hash, audio, marks)
                 done += 1
                 if progress:
                     progress(done, total)

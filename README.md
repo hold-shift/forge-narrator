@@ -7,12 +7,16 @@ timing — the three S3 files for the Skitch Family Archive TTS player:
 Standalone tool, one machine (M2 MacBook Air). See `docs/TTS_Spec_B_AudioGenerator.md`
 for the build contract and `docs/TTS_Spec_0_Overview.md` for the shared architecture.
 
+> Provider: **ElevenLabs** (`eleven_v3`, voice `fjnwTZkKtQOJaYzGLa6n`). The
+> `/with-timestamps` endpoint returns word timing *with* the audio, so there is
+> **no alignment stage** — timing is a by-product of synthesis.
+
 ## Pipeline
 
 ```
-manifest.zip → Polly (Brian, generative, eu-west-2) per block, cached by hash,
-             synthesised 8–10 in parallel → ffmpeg stitch (+ offset table)
-             → whispermlx forced alignment → out/{slug}/ (3 files)
+manifest.zip → ElevenLabs /with-timestamps per block (cached by hash,
+             synthesised ~8 in parallel) → group chars→words → ffmpeg stitch
+             (+ offset table) → marks shifted by offsets → out/{slug}/ (3 files)
 ```
 
 ## Setup
@@ -20,26 +24,25 @@ manifest.zip → Polly (Brian, generative, eu-west-2) per block, cached by hash,
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-pip install -e .            # runtime: boto3
-pip install whispermlx     # alignment backend (Apple Silicon, Python 3.11)
+pip install -e .            # no runtime Python deps (ElevenLabs via stdlib urllib)
 brew install ffmpeg        # HARD dependency (ffmpeg + ffprobe), already on the Air
 ```
 
-AWS credentials come from the standard chain (`~/.aws`, user `PollyAPI-user`).
-**Never** put keys in code or args.
+The ElevenLabs API key is read from `ELEVENLABS_API_KEY` or a local **gitignored**
+`.elevenlabs_key` file. **Never** hardcoded or logged.
 
 ## Use
 
 ```bash
-# Cost/throughput preview — no API calls, no aligner needed:
+# Cost preview — no API calls:
 forge-narrator estimate manifest.zip
 
-# Full run — gated by a cost confirmation before any paid Polly call:
+# Full run — gated by a cost confirmation before any paid call:
 forge-narrator generate manifest.zip --out ./out
-forge-narrator generate manifest.zip --yes          # skip the prompt
-forge-narrator generate manifest.zip --char-cap 4000000   # monthly safety cap
-forge-narrator generate manifest.zip --no-cache     # force full re-synthesis
-forge-narrator generate manifest.zip --model medium.en    # tricky documents
+forge-narrator generate manifest.zip --yes              # skip the prompt
+forge-narrator generate manifest.zip --char-cap 200000  # safety cap (refuse beyond)
+forge-narrator generate manifest.zip --no-cache         # force full re-synthesis
+forge-narrator generate manifest.zip --concurrency 6    # tune parallel requests
 ```
 
 Output lands in `out/{slug}/`. The operator uploads that folder to S3 and pastes
@@ -47,10 +50,11 @@ the base URL into NotebookForge.
 
 ### Cost guard rails (mandatory)
 
-`generate` prints the uncached character count and estimated cost
-(generative = $30 / 1M chars) and requires `--yes` or an interactive `y`. The full
-archive is ~$116; caching means re-runs after a small edit re-synthesise only the
-changed blocks.
+ElevenLabs bills **1 character = 1 credit**. `generate` prints the uncached
+character/credit count and an approximate cost, and requires `--yes` or an
+interactive `y` before any paid call. The full archive (~3.87M chars) is
+~$390–450 on the fast-and-overage path; caching means re-runs after a small edit
+re-synthesise only the changed blocks.
 
 ## Validating output against the POC player
 
@@ -60,7 +64,7 @@ changed blocks.
 ```bash
 cd out/{slug}
 cp document.marks.json sample.marks.json          # player fetches this name
-# edit poc/player.html's <audio src> to document.mp3, or copy player.html here
+# point poc/player.html's <audio src> at document.mp3 (or copy player.html here)
 python3 -m http.server 8000                        # then open the page
 ```
 
@@ -72,33 +76,35 @@ the POC checker only needs the flat marks.)
 
 ```jsonc
 {
-  "version": 1,
-  "slug": "junior",
+  "document_slug": "junior",
   "title": "Junior",
-  "voice": "Brian",
-  "engine": "generative",
+  "voice": "fjnwTZkKtQOJaYzGLa6n",   // ElevenLabs voice id
+  "model": "eleven_v3",
   "blocks": [
-    { "index": 0, "type": "heading",   "text": "…", "ssml": "<speak>…</speak>", "hash": "<sha256>" },
-    { "index": 1, "type": "paragraph", "text": "…", "ssml": "<speak>…</speak>", "hash": "<sha256>" }
+    { "index": 0, "type": "heading",   "ssml": "…", "hash": "<sha256>" },
+    { "index": 1, "type": "paragraph", "ssml": "…", "hash": "<sha256>" }
   ]
 }
 ```
 
-`hash = sha256(ssml \0 voice \0 engine)` — the cache key and staleness spine.
-Only `heading`/`paragraph` blocks appear; everything else is stripped by
-NotebookForge per the Overview's "What is narratable" table. Blocks are in order,
-and that order is sacred: SSML → mp3 → marks → blocks share one word index.
+`hash = sha256(ssml + voice + model)` — the cache key and staleness spine (plain
+concatenation, no separator). Blocks are SSML-only (the generator derives readable
+text from the SSML). `heading`/`paragraph`/`footnote` blocks appear; footnotes are
+narrated but flagged `highlightable: false`. Blocks are in order, and that order is
+sacred: SSML → mp3 → marks → blocks share one word index.
 
 ## Tests
 
 ```bash
-pip install pytest && pytest          # offline: parsing, cost, stitch (real ffmpeg), alignment invariant
+pip install -e '.[dev]' && pytest    # offline: parsing, cost, char→word grouping,
+                                     # offset-shift assembly, blocks.json, real-ffmpeg stitch
 ```
 
-The alignment test injects a fake `whispermlx` so it runs without a GPU model; a
-real end-to-end run needs `whispermlx` installed and makes paid Polly calls.
+All tests run offline (no API key, no network). A real end-to-end `generate` makes
+paid ElevenLabs calls.
 
 ## Development fixture
 
 `tests/fixtures/build_fixture.py` regenerates a small valid `manifest.zip`/`.json`
-from the POC sample prose for manual `estimate`/`generate` testing.
+from the POC sample prose (ElevenLabs dialect) for manual `estimate`/`generate` testing.
+```
