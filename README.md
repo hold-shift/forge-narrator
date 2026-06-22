@@ -1,127 +1,140 @@
 # forge-narrator
 
-Turns a NotebookForge SSML **manifest zip** into narrated audio with word-level
-timing — the three S3 files for the Skitch Family Archive TTS player:
-`document.mp3`, `document.marks.json`, `document.blocks.json`.
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](#licence)
+![Version](https://img.shields.io/badge/version-0.1.0-success)
+![Python](https://img.shields.io/badge/python-3.11-3776AB?logo=python&logoColor=white)
+![Voice: ElevenLabs](https://img.shields.io/badge/voice-ElevenLabs%20eleven__v3-5A37F0)
+![Built for NotebookLM](https://img.shields.io/badge/built%20for-NotebookLM-4285F4?logo=googlebard&logoColor=white)
 
-Standalone tool, one machine (M2 MacBook Air). See `docs/TTS_Spec_B_AudioGenerator.md`
-for the build contract and `docs/TTS_Spec_0_Overview.md` for the shared architecture.
+**Turn a [Notebook Forge](https://github.com/hold-shift/notebook-forge) document
+into narrated audio with word‑level timing — a single MP3 plus the timing data a
+web player needs to highlight each word as it's spoken and let the reader
+click‑to‑seek anywhere in the text.**
 
-> Provider: **ElevenLabs** (`eleven_v3`, voice `fjnwTZkKtQOJaYzGLa6n`). The
-> `/with-timestamps` endpoint returns word timing *with* the audio, so there is
-> **no alignment stage** — timing is a by-product of synthesis.
+forge-narrator is the standalone audio companion to Notebook Forge. Notebook
+Forge stays "smart" — it knows the document structure and writes the exact text
+to speak per block; forge-narrator stays "dumb" — it runs that text through
+ElevenLabs, stitches the audio, derives the word timings, and (optionally)
+publishes the result. The two tools never call each other: the interface is a
+**manifest zip** exported by Notebook Forge and three output files served from a
+public base URL.
 
-## Pipeline
+> ### ℹ️ Why a separate tool
+>
+> Audio generation is paid, slow, and machine‑specific, so it's split out of the
+> publishing app. ElevenLabs' `/with-timestamps` endpoint returns **per‑character
+> timing alongside the audio in one call**, so there is no forced‑alignment stage
+> — word timing is a by‑product of synthesis. Everything runs locally on one Mac;
+> nothing is sent anywhere except ElevenLabs (synthesis) and Cloudflare R2 (the
+> upload you explicitly trigger).
+
+## How it works
 
 ```
-manifest.zip → ElevenLabs /with-timestamps per block (cached by hash,
-             synthesised ~8 in parallel) → group chars→words → ffmpeg stitch
-             (+ offset table) → marks shifted by offsets → out/{slug}/ (3 files)
+   manifest.zip   (from Notebook Forge — per-block plain text + hashes, voice, model)
+        │
+        ▼
+   ┌────────────────────────────────────────────────────┐
+   │ per block, cached by content hash (parallel):       │
+   │   ElevenLabs /with-timestamps → block mp3 + char    │
+   │   timings → grouped into word marks                 │
+   │   only changed blocks are re-synthesised            │
+   └───────────────────────────┬─────────────────────────┘
+                               ▼
+   ┌────────────────────────────────────────────────────┐
+   │ ffmpeg stitch + deterministic silence seams         │
+   │   → document.mp3          (constant bitrate, seekable)│
+   │ shift each block's marks by its stitch offset        │
+   │   → document.marks.json   ([{word,start,end}], secs) │
+   │ emit document.blocks.json (text + word/time spans)   │
+   └───────────────────────────┬─────────────────────────┘
+                               │  forge-narrator upload {slug}
+                               ▼
+   Cloudflare R2 → https://pub-….r2.dev/{slug}
+                   paste into Notebook Forge → document's Narration panel
 ```
 
-## Setup
+The three files share one word ordering, so the player aligns marks ↔ text by a
+running word index. That invariant is sacrosanct: the order of words in the text,
+the mp3, the marks and the blocks is identical.
 
-```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -e .            # no runtime Python deps (ElevenLabs via stdlib urllib)
-brew install ffmpeg        # HARD dependency (ffmpeg + ffprobe), already on the Air
+## Requirements
+
+- **macOS** (the M2 MacBook Air — single machine, no GPU/alignment stage).
+- **Python 3.11**.
+- **ffmpeg + ffprobe** — a hard dependency (`brew install ffmpeg`).
+- An **ElevenLabs API key** (synthesis is paid; voice `fjnwTZkKtQOJaYzGLa6n`,
+  model `eleven_v3`).
+- For publishing only: **[wrangler](https://developers.cloudflare.com/workers/wrangler/)**
+  (used via `npx`, no global install needed) and a **Cloudflare R2** bucket.
+
+## Install
+
+```sh
+git clone https://github.com/hold-shift/forge-narrator.git
+cd forge-narrator
+
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -e .            # core (no runtime Python deps — ElevenLabs via stdlib)
+pip install -e '.[web]'     # + the local web console (FastAPI · uvicorn)
+brew install ffmpeg         # ffmpeg + ffprobe
 ```
 
-The ElevenLabs API key is read from `ELEVENLABS_API_KEY` or a local **gitignored**
-`.elevenlabs_key` file. **Never** hardcoded or logged.
+## Usage
 
-## Use
-
-```bash
-# Cost preview — no API calls:
+```sh
+# 1. Preview — characters + ElevenLabs credit cost, no API calls
 forge-narrator estimate manifest.zip
 
-# Full run — gated by a cost confirmation before any paid call:
-forge-narrator generate manifest.zip --out ./out
-forge-narrator generate manifest.zip --yes              # skip the prompt
-forge-narrator generate manifest.zip --char-cap 200000  # safety cap (refuse beyond)
-forge-narrator generate manifest.zip --no-cache         # force full re-synthesis
-forge-narrator generate manifest.zip --concurrency 6    # tune parallel requests
+# 2. Generate — synthesise → stitch → assemble into out/{slug}/
+forge-narrator generate manifest.zip                 # prompts for cost confirmation
+forge-narrator generate manifest.zip --yes           # skip the prompt
+forge-narrator generate manifest.zip --upload        # … and publish to R2 when done
+forge-narrator generate manifest.zip --no-cache      # force full re-synthesis
+forge-narrator generate manifest.zip --char-cap 200000   # refuse beyond a budget
+
+# 3. Publish — push out/{slug}/ to R2 and print the base URL
+forge-narrator upload {slug} --dry-run               # show the commands, upload nothing
+forge-narrator upload {slug}
+
+# 4. Web console — the whole flow in a browser (localhost only)
+forge-narrator serve                                 # → http://127.0.0.1:8765
 ```
 
-Output lands in `out/{slug}/`. Publish it with `forge-narrator upload {slug}`
-(below) — or `generate --upload` to do both in one step — then paste the printed
-base URL into NotebookForge.
+ElevenLabs bills **1 character = 1 credit**. `generate` always prints the uncached
+character/credit count and an approximate cost and won't make a paid call without
+`--yes` (or the web **Generate** button). Caching is content‑addressed, so after a
+small Notebook Forge edit only the changed blocks are re‑synthesised — a one‑line
+fix is pennies, not a full re‑render.
 
-## Uploading to R2
+## Web console
 
-Pushes the three files in `out/{slug}/` to Cloudflare R2 and prints the public
-base URL. It shells out to **wrangler** (no extra Python deps); the Cloudflare
-token lives in wrangler, never in forge-narrator.
+`forge-narrator serve` launches a single‑page console (FastAPI, bound to
+`127.0.0.1`) over the same pipeline: **choose** a manifest → **pre‑flight** cost
+summary → **Generate** (the cost gate, re‑checked server‑side) with live progress
+→ **Preview** in the player (served with HTTP Range, so click‑to‑seek works) →
+**Publish to R2** and copy the base URL. The ElevenLabs and Cloudflare credentials
+never leave the backend.
 
-```bash
+## Publishing to R2
+
+forge-narrator shells out to `wrangler` (no extra Python deps); the Cloudflare
+token lives inside wrangler — never read, stored, or logged here.
+
+```sh
 # one-time setup
-npm i -g wrangler         # or use npx; forge-narrator falls back to `npx --yes wrangler@latest`
-wrangler login
-wrangler r2 bucket create notebook-forge-audio
-wrangler r2 bucket dev-url enable notebook-forge-audio
-wrangler r2 bucket cors set notebook-forge-audio --file out/r2-cors.json
-
-# then, per document
-forge-narrator upload 1934-1945_junior --dry-run   # print commands + base URL, upload nothing
-forge-narrator upload 1934-1945_junior             # upload + print the base URL
-forge-narrator generate manifest.zip --upload      # generate, then upload
+npx --yes wrangler@latest login
+npx --yes wrangler@latest r2 bucket create notebook-forge-audio
+npx --yes wrangler@latest r2 bucket dev-url enable notebook-forge-audio
+npx --yes wrangler@latest r2 bucket cors set notebook-forge-audio --file out/r2-cors.json
 ```
 
 Objects land at `{bucket}/{slug}/document.{mp3,marks.json,blocks.json}`, so the
-base URL is `{base}/{slug}` (the player appends `/document.mp3` etc.). Config:
-`--bucket` › `$FORGE_R2_BUCKET` › `notebook-forge-audio`; base URL `--base-url` ›
-`$FORGE_R2_BASE_URL` (custom domain) › resolved from `wrangler r2 bucket dev-url
-get`. Re-running overwrites (R2 put is upsert). The tool never creates the bucket,
-enables public access, or sets CORS — those are the one-time setup above.
+base URL is `{base}/{slug}` (the player appends `/document.mp3` etc.). Re‑running
+overwrites. The tool never creates the bucket, enables public access, or sets
+CORS — those are the one‑time setup above.
 
-Paste the printed base URL into NotebookForge → the document's Narration panel →
-**Audio base URL**.
-
-## Web console (`serve`)
-
-A local single-page console over the same pipeline (Spec C): pick a manifest,
-see the pre-flight cost summary, click **Generate**, watch live progress, then
-**Preview** the result in the player.
-
-```bash
-pip install -e '.[web]'                       # FastAPI + uvicorn (one-time)
-forge-narrator serve                          # → http://127.0.0.1:8765
-forge-narrator serve --port 8791 --char-cap 4000000
-```
-
-Localhost only (binds `127.0.0.1`). The **Generate** button is the cost gate
-(equivalent to `--yes`), re-checked server-side. The preview is served with HTTP
-Range support, so click-to-seek works (bare `python -m http.server` does not — it
-breaks `<audio>` seeking). The API key stays server-side — never sent to the
-browser or logged.
-
-### Cost guard rails (mandatory)
-
-ElevenLabs bills **1 character = 1 credit**. `generate` prints the uncached
-character/credit count and an approximate cost, and requires `--yes` or an
-interactive `y` before any paid call. The full archive (~3.87M chars) is
-~$390–450 on the fast-and-overage path; caching means re-runs after a small edit
-re-synthesise only the changed blocks.
-
-## Validating output against the POC player
-
-`document.marks.json` is byte-compatible with the proven POC checker
-(`poc/player.html`). To sanity-check sync for a generated document:
-
-```bash
-cd out/{slug}
-cp document.marks.json sample.marks.json          # player fetches this name
-# point poc/player.html's <audio src> at document.mp3 (or copy player.html here)
-python3 -m http.server 8000                        # then open the page
-```
-
-Press play and confirm the amber highlight tracks the spoken word.
-(`document.blocks.json` is the richer render source the real front-end player uses;
-the POC checker only needs the flat marks.)
-
-## Manifest schema (the contract NotebookForge writes)
+## The manifest (the contract Notebook Forge writes)
 
 ```jsonc
 {
@@ -130,30 +143,59 @@ the POC checker only needs the flat marks.)
   "voice": "fjnwTZkKtQOJaYzGLa6n",   // ElevenLabs voice id
   "model": "eleven_v3",
   "blocks": [
-    { "index": 0, "type": "heading",   "ssml": "…", "hash": "<sha256>" },
-    { "index": 1, "type": "paragraph", "ssml": "…", "hash": "<sha256>" }
+    { "index": 0, "type": "heading",   "ssml": "Prologue",  "hash": "<sha256>" },
+    { "index": 1, "type": "paragraph", "ssml": "Junior …",  "hash": "<sha256>" }
   ]
 }
 ```
 
-`hash = sha256(ssml + voice + model)` — the cache key and staleness spine (plain
-concatenation, no separator). Blocks are SSML-only (the generator derives readable
-text from the SSML). `heading`/`paragraph`/`footnote` blocks appear; footnotes are
-narrated but flagged `highlightable: false`. Blocks are in order, and that order is
-sacred: SSML → mp3 → marks → blocks share one word index.
+`hash = sha256(ssml + voice + model)` — the cache key and staleness spine. Blocks
+carry **plain text** (eleven_v3 does not honour SSML tags — see
+`docs/SSML_FINDINGS.md`); `heading` / `paragraph` / `footnote` types appear, in
+order. Pacing (pauses before/after headings, between paragraphs) is added by the
+stitcher as silence seams — the manifest stays pure text.
+
+## Configuration
+
+| Variable | Purpose | Default / how to set |
+|---|---|---|
+| `ELEVENLABS_API_KEY` | synthesis | env var, or a gitignored `.elevenlabs_key` file |
+| `FORGE_R2_BUCKET` | R2 bucket name | `notebook-forge-audio` (or `--bucket`) |
+| `FORGE_R2_BASE_URL` | custom-domain base URL | resolved from wrangler (or `--base-url`) |
+
+The Cloudflare token is held by wrangler (`wrangler login`); the ElevenLabs key
+is read from the env var or the local key file. Neither is ever written to logs,
+output, or git.
+
+## Project layout
+
+```
+src/forge_narrator/
+  cli.py            estimate · generate · serve · upload
+  manifest.py       manifest reader + validation; hashing.py · cache.py · cost.py
+  synth.py          ElevenLabs /with-timestamps (parallel, cached, 429 backoff)
+  stitch.py         ffmpeg stitch + silence seams + offsets
+  marks.py          char→word grouping + document-marks assembly
+  blocks_json.py    the player's render source
+  pipeline.py       end-to-end generate (with progress callback)
+  upload.py         Cloudflare R2 upload via wrangler
+  web/              FastAPI console (server.py) + static SPA
+poc/                proof-of-concept seeds + player.html (the sync checker)
+docs/               specs (Overview · Audio Generator · Web Interface) + SSML findings
+tests/              pytest suite (offline — no network, no paid calls)
+out/  ·  cache/     generated output + hash-keyed cache (gitignored)
+```
 
 ## Tests
 
-```bash
-pip install -e '.[dev]' && pytest    # offline: parsing, cost, char→word grouping,
-                                     # offset-shift assembly, blocks.json, real-ffmpeg stitch
+```sh
+pip install -e '.[dev]' && pytest
 ```
 
-All tests run offline (no API key, no network). A real end-to-end `generate` makes
-paid ElevenLabs calls.
+The whole suite runs offline — no API key, no network, no wrangler (the ElevenLabs
+and wrangler calls are monkeypatched; the ffmpeg stitch test uses a small POC clip).
 
-## Development fixture
+## Licence
 
-`tests/fixtures/build_fixture.py` regenerates a small valid `manifest.zip`/`.json`
-from the POC sample prose (ElevenLabs dialect) for manual `estimate`/`generate` testing.
-```
+Code: **MIT** — free to use, modify and distribute. Generated audio, manifests and
+the documents they come from are not part of this repository and remain yours.
