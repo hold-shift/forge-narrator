@@ -48,7 +48,7 @@ def estimate_manifest(manifest: Manifest, cache: BlockCache) -> Estimate:
     cached = 0
     for b in manifest.blocks:
         total_chars += b.billed_chars
-        if cache.has(b.hash):
+        if cache.has(b.synth_hash):
             cached += 1
         else:
             uncached_chars += b.billed_chars

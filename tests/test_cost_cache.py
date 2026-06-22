@@ -39,7 +39,7 @@ def test_estimate_all_uncached(tmp_path, manifest_dict):
 def test_estimate_with_some_cached(tmp_path, manifest_dict):
     m = _manifest(tmp_path, manifest_dict)
     cache = BlockCache(tmp_path / "cache")
-    cache.put(m.blocks[0].hash, b"\x00\x01", [])  # pretend block 0 is cached
+    cache.put(m.blocks[0].synth_hash, b"\x00\x01", [])  # pretend block 0 is cached
     est = estimate_manifest(m, cache)
     assert est.cached_blocks == 1
     assert est.uncached_blocks == 2
@@ -49,8 +49,8 @@ def test_estimate_with_some_cached(tmp_path, manifest_dict):
 def test_no_cache_disables_reads(tmp_path, manifest_dict):
     m = _manifest(tmp_path, manifest_dict)
     cache = BlockCache(tmp_path / "cache", enabled=False)
-    cache.put(m.blocks[0].hash, b"\x00\x01", [])  # written...
-    assert not cache.has(m.blocks[0].hash)        # ...but reads disabled
+    cache.put(m.blocks[0].synth_hash, b"\x00\x01", [])  # written...
+    assert not cache.has(m.blocks[0].synth_hash)        # ...but reads disabled
     est = estimate_manifest(m, cache)
     assert est.cached_blocks == 0
 

@@ -25,6 +25,18 @@ def test_group_chars_to_words_basic():
     ]
 
 
+def test_group_strips_v3_audio_tags():
+    # ElevenLabs v3 audio cues like [pause] leak into the alignment but are not
+    # spoken words — they must be dropped from the marks (the audio keeps the pause).
+    text = "Prologue [pause] Junior here"
+    chars = list(text)
+    starts = [i * 0.1 for i in range(len(chars))]
+    ends = [s + 0.1 for s in starts]
+    words = group_chars_to_words(chars, starts, ends)
+    assert [w["word"] for w in words] == ["Prologue", "Junior", "here"]
+    assert not any("[" in w["word"] or "]" in w["word"] for w in words)
+
+
 def test_group_handles_leading_and_trailing_space():
     chars = list("  a ")
     starts = [0.0, 0.1, 0.2, 0.3]
@@ -59,7 +71,7 @@ def test_assemble_document_marks_offsets_and_ranges(tmp_path, manifest_dict):
         [{"word": "Second", "start": 0.0, "end": 0.6}],
     ]
     for b, bm in zip(m.blocks, block_marks):
-        cache.put(b.hash, b"audio", bm)
+        cache.put(b.synth_hash, b"audio", bm)
 
     offsets = [BlockOffset(0, 0.0, 1.0), BlockOffset(1, 1.0, 2.2), BlockOffset(2, 2.2, 3.0)]
 

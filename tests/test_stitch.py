@@ -39,7 +39,7 @@ def _two_block_manifest(tmp_path, poc_mp3):
     cache = BlockCache(tmp_path / "cache")
     audio = poc_mp3.read_bytes()
     for b in m.blocks:
-        cache.put(b.hash, audio, [])  # marks not needed for the stitch test
+        cache.put(b.synth_hash, audio, [])  # marks not needed for the stitch test
     return m, cache
 
 
@@ -53,18 +53,31 @@ def test_stitch_produces_mp3_and_offsets(tmp_path, poc_mp3):
     assert out_mp3.exists() and out_mp3.stat().st_size > 0
     assert len(offsets) == 2
 
-    # Offsets are contiguous and monotonic.
+    # A deterministic silence seam separates the heading from the paragraph, so
+    # the blocks are NOT contiguous — there's a gap of exactly the seam size.
+    from forge_narrator.stitch import _seam_silence
+    gap = _seam_silence("heading", "paragraph")
     assert offsets[0].time_start == 0.0
-    assert offsets[0].time_end == offsets[1].time_start
+    assert offsets[1].time_start == pytest.approx(offsets[0].time_end + gap, abs=0.05)
     assert offsets[1].time_end > offsets[1].time_start
 
-    # Two copies of the same clip → stitched duration ≈ 2× a single clip,
-    # and ≈ the final block's time_end.
+    # Two copies of the same clip + the seam → ≈ 2× a single clip + gap,
+    # and the final block ends at ≈ the total duration.
     single = probe_duration(shutil_which_ffprobe(), str(poc_mp3))
     total = probe_duration(shutil_which_ffprobe(), str(out_mp3))
-    assert total == pytest.approx(2 * single, rel=0.05)
-    assert offsets[-1].time_end == pytest.approx(total, rel=0.03)
+    assert total == pytest.approx(2 * single + gap, abs=0.2)
+    assert offsets[-1].time_end == pytest.approx(total, abs=0.1)
 
 
 def shutil_which_ffprobe():
     return shutil.which("ffprobe")
+
+
+def test_seam_silence_rules():
+    from forge_narrator.stitch import _seam_silence
+    # Larger separation before a heading/footnote than between paragraphs.
+    assert _seam_silence("paragraph", "heading") > _seam_silence("paragraph", "paragraph")
+    assert _seam_silence("paragraph", "footnote") > _seam_silence("paragraph", "paragraph")
+    # A beat after a heading, before the body.
+    assert _seam_silence("heading", "paragraph") > 0
+    assert _seam_silence("paragraph", "paragraph") > 0

@@ -6,10 +6,17 @@ to ``document.mp3`` in a single pass. Offsets are accumulated from the exact WAV
 durations, so the offset table sits on the same timeline as the final mp3 (no
 per-segment mp3 padding drift accumulating across hundreds of blocks).
 
-Each block's start offset shifts that block's word marks into document-global
-time (see ``marks.assemble_document_marks``) and feeds ``document.blocks.json``.
-Word→block mapping is by construction (per-block synthesis), not from these
-offsets — they only provide the time axis.
+A deterministic **silence seam** is inserted between blocks for pacing, sized by
+the block types on each side (``_seam_silence``) — a reliable, tunable beat before
+headings, after headings, and between paragraphs, without relying on ElevenLabs v3
+``[pause]`` tags (which vary 0.2–1.5s and leak into the alignment). The silence
+carries no marks, so the highlight track stays clean and NotebookForge can stay
+pure plain text.
+
+Each block's start offset (now including the accumulated seam silence) shifts that
+block's word marks into document-global time (see ``marks.assemble_document_marks``)
+and feeds ``document.blocks.json``. Word→block mapping is by construction (per-block
+synthesis), not from these offsets — they only provide the time axis.
 """
 
 from __future__ import annotations
@@ -24,6 +31,22 @@ from .manifest import Manifest
 
 # Canonical intermediate PCM format. 24 kHz mono is ample for speech.
 _SR = 24000
+
+# Deterministic pacing: silence inserted at block seams, sized by the block types
+# on each side (seconds). Reliable and tunable — unlike v3 `[pause]` tags, which
+# vary 0.2–1.5s and leak into the alignment. Pure silence carries no marks.
+_SEAM_BEFORE_HEADING_OR_FOOTNOTE = 0.8   # clear separation before a heading/footnote
+_SEAM_AFTER_HEADING_OR_FOOTNOTE = 0.6    # beat after a heading/footnote, before the body
+_SEAM_BETWEEN_PARAGRAPHS = 0.5           # breath between paragraphs
+
+
+def _seam_silence(prev_type: str, next_type: str) -> float:
+    """Silence (seconds) to insert between a ``prev_type`` block and a ``next_type``."""
+    if next_type in ("heading", "footnote"):
+        return _SEAM_BEFORE_HEADING_OR_FOOTNOTE
+    if prev_type in ("heading", "footnote"):
+        return _SEAM_AFTER_HEADING_OR_FOOTNOTE
+    return _SEAM_BETWEEN_PARAGRAPHS
 
 
 @dataclass(frozen=True)
@@ -44,9 +67,28 @@ def stitch(manifest: Manifest, cache: BlockCache, out_mp3: Path) -> list[BlockOf
         wavs: list[Path] = []
         offsets: list[BlockOffset] = []
         cursor = 0.0
+        silence: dict[str, Path] = {}  # duration → reusable silence wav
 
+        def silence_wav(seconds: float) -> Path:
+            key = f"{seconds:.3f}"
+            if key not in silence:
+                sp = tmpdir / f"silence_{key}.wav"
+                run([
+                    ffmpeg, "-nostdin", "-y", "-f", "lavfi",
+                    "-i", f"anullsrc=r={_SR}:cl=mono", "-t", key,
+                    "-c:a", "pcm_s16le", str(sp),
+                ])
+                silence[key] = sp
+            return silence[key]
+
+        prev_type = None
         for block in manifest.blocks:
-            src = cache.path_for(block.hash)
+            if prev_type is not None:
+                gap = _seam_silence(prev_type, block.type)
+                if gap > 0:
+                    wavs.append(silence_wav(gap))
+                    cursor += gap
+            src = cache.path_for(block.synth_hash)
             if not src.exists():
                 raise FileNotFoundError(
                     f"block {block.index} not in cache ({src}); synthesise first"
@@ -65,6 +107,7 @@ def stitch(manifest: Manifest, cache: BlockCache, out_mp3: Path) -> list[BlockOf
             ))
             cursor += dur
             wavs.append(wav)
+            prev_type = block.type
 
         # Sample-accurate concat of the PCM WAVs, then single-pass mp3 encode.
         concat_list = tmpdir / "concat.txt"

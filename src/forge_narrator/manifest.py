@@ -45,6 +45,23 @@ from .ssml import ssml_to_text
 MANIFEST_NAME = "manifest.json"
 SUPPORTED_VERSION = 1
 BLOCK_TYPES = ("heading", "paragraph", "footnote")
+_TERMINAL_PUNCT = (".", "!", "?", "…", ":", ";")
+
+
+def synthesis_text(block_type: str, ssml: str) -> str:
+    """The exact text sent to ElevenLabs for a block — usually the ssml verbatim.
+
+    Short, bare headings (a single word with no terminal punctuation) get clipped
+    by ElevenLabs ("Introduc…" instead of "Introduction"), so a heading without
+    terminal punctuation gets a trailing period appended **for synthesis only**.
+    The period is not spoken; it just signals the model to finish the word. The
+    displayed text (``Block.text``) is unaffected, so headings render clean.
+    """
+    if block_type == "heading":
+        stripped = ssml.rstrip()
+        if stripped and not stripped.endswith(_TERMINAL_PUNCT):
+            return stripped + "."
+    return ssml
 
 
 class ManifestError(Exception):
@@ -59,17 +76,18 @@ class Block:
     type: str
     text: str
     ssml: str
-    hash: str
+    hash: str          # manifest content hash (NotebookForge staleness contract)
+    synth_hash: str    # cache key — hash over the exact text sent to ElevenLabs
+
+    @property
+    def synth_text(self) -> str:
+        """The exact text sent to ElevenLabs (ssml, plus the heading-clip period)."""
+        return synthesis_text(self.type, self.ssml)
 
     @property
     def billed_chars(self) -> int:
-        """Characters submitted to ElevenLabs (the SSML/text string).
-
-        ElevenLabs bills 1 character = 1 credit. This is the full string length
-        including any tags — a deliberate over-estimate for the cost guard rail
-        (ElevenLabs may strip tags), so the printed bill is never a surprise low.
-        """
-        return len(self.ssml)
+        """Characters submitted to ElevenLabs (1 character = 1 credit)."""
+        return len(self.synth_text)
 
 
 @dataclass(frozen=True)
@@ -195,7 +213,9 @@ def load_manifest(path: str | Path, *, verify_hashes: bool = True) -> Manifest:
                     f"recomputed {expected[:12]}…. Manifest is inconsistent or the "
                     "hash recipe diverged from NotebookForge."
                 )
-        blocks.append(Block(index=i, type=btype, text=text, ssml=ssml, hash=bhash))
+        synth_hash = block_hash(synthesis_text(btype, ssml), voice, model)
+        blocks.append(Block(index=i, type=btype, text=text, ssml=ssml,
+                            hash=bhash, synth_hash=synth_hash))
 
     return Manifest(
         version=version,

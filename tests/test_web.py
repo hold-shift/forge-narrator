@@ -65,7 +65,8 @@ def test_upload_and_inspect(tmp_path):
     assert d["voice"] == VOICE and d["model"] == MODEL
     assert d["block_total"] == 1
     assert d["blocks_to_synth"] == 1          # empty cache
-    assert d["chars_to_synth"] == len("Just a heading")
+    # heading gets a synthesis-only trailing period (anti-clip), so +1 char
+    assert d["chars_to_synth"] == len("Just a heading.")
     assert d["over_cap"] is False
 
 

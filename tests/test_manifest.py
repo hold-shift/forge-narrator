@@ -42,6 +42,27 @@ def test_real_format_document_slug_and_derived_text(tmp_path):
     assert m.transcript == "Prologue"
 
 
+def test_synthesis_text_heading_clip_fix():
+    from forge_narrator.manifest import synthesis_text
+    # Bare heading → trailing period (anti-clip); already-punctuated heading and
+    # paragraphs are untouched.
+    assert synthesis_text("heading", "Introduction") == "Introduction."
+    assert synthesis_text("heading", "Prologue.") == "Prologue."
+    assert synthesis_text("heading", "Chapter 1!") == "Chapter 1!"
+    assert synthesis_text("paragraph", "Junior hurries down the hill") == \
+        "Junior hurries down the hill"
+
+
+def test_synth_hash_differs_for_bare_heading_only(tmp_path, manifest_dict):
+    m = load_manifest(_write_json(tmp_path, manifest_dict))
+    heading, para = m.blocks[0], m.blocks[1]
+    assert heading.type == "heading"
+    assert heading.synth_text == "A Heading."      # period appended for synthesis
+    assert heading.synth_hash != heading.hash      # → distinct cache key
+    assert para.synth_text == para.ssml            # paragraph unchanged
+    assert para.synth_hash == para.hash            # → same cache key (cache reused)
+
+
 def test_load_from_json(tmp_path, manifest_dict):
     m = load_manifest(_write_json(tmp_path, manifest_dict))
     assert m.slug == "test-doc"
@@ -66,7 +87,7 @@ def test_transcript_and_chars(manifest_dict, tmp_path):
     m = load_manifest(_write_json(tmp_path, manifest_dict))
     assert "A Heading" in m.transcript
     assert m.transcript.count("\n\n") == 2  # 3 blocks → 2 separators
-    assert m.total_billed_chars == sum(len(b.ssml) for b in m.blocks)
+    assert m.total_billed_chars == sum(len(b.synth_text) for b in m.blocks)
 
 
 def test_missing_voice(tmp_path, manifest_dict):

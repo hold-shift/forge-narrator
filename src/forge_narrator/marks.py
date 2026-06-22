@@ -29,26 +29,43 @@ def group_chars_to_words(
 
     Split on whitespace; a word's start is its first char's start and its end is
     its last char's end. Times are rounded to ms. (Seed: probe.group_chars_to_words.)
+
+    ElevenLabs v3 **audio tags** (``[pause]``, ``[reflective]``, …) are returned
+    verbatim in the alignment but are delivery cues, not spoken words, so any
+    ``[...]`` segment is dropped — it never becomes a mark. The pause/effect it
+    produces stays in the audio; the highlight track stays clean.
     """
     words: list[dict] = []
     cur = ""
     cur_start = None
     prev_end = 0.0
+    in_tag = False
+
+    def flush():
+        nonlocal cur, cur_start
+        if cur:
+            words.append({"word": cur, "start": round(cur_start, 3),
+                          "end": round(prev_end, 3)})
+            cur = ""
+            cur_start = None
+
     for ch, st, en in zip(characters, starts, ends):
+        if in_tag:
+            if ch == "]":
+                in_tag = False
+            continue
+        if ch == "[":          # start of an audio tag → boundary, then skip it
+            flush()
+            in_tag = True
+            continue
         if ch.isspace():
-            if cur:
-                words.append({"word": cur, "start": round(cur_start, 3),
-                              "end": round(prev_end, 3)})
-                cur = ""
-                cur_start = None
+            flush()
         else:
             if not cur:
                 cur_start = st
             cur += ch
             prev_end = en
-    if cur:
-        words.append({"word": cur, "start": round(cur_start, 3),
-                      "end": round(prev_end, 3)})
+    flush()
     return words
 
 
@@ -81,7 +98,7 @@ def assemble_document_marks(
     marks: list[dict] = []
     ranges: list[tuple[int, int]] = []
     for block, off in zip(manifest.blocks, offsets):
-        block_marks = cache.get_marks(block.hash)
+        block_marks = cache.get_marks(block.synth_hash)
         if block_marks is None:
             raise FileNotFoundError(
                 f"block {block.index} marks not in cache; synthesise first"

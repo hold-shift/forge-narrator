@@ -107,7 +107,7 @@ def _synthesise_one(
     hard_tries = 0
     while True:
         try:
-            out = _request(voice_id, model, block.ssml, key)
+            out = _request(voice_id, model, block.synth_text, key)
             audio = base64.b64decode(out["audio_base64"])
             al = out.get("normalized_alignment") or out.get("alignment")
             if not al:
@@ -179,8 +179,8 @@ def synthesise(
     Raises ``SynthesisError`` on the first unrecoverable failure (after cancelling
     pending work) so the operator can fix and re-run — cached blocks make it cheap.
     """
-    todo = [b for b in manifest.blocks if not cache.has(b.hash)]
-    cached = [b for b in manifest.blocks if cache.has(b.hash)]
+    todo = [b for b in manifest.blocks if not cache.has(b.synth_hash)]
+    cached = [b for b in manifest.blocks if cache.has(b.synth_hash)]
     from_cache = len(cached)
 
     if on_block:
@@ -202,7 +202,7 @@ def synthesise(
             for fut in as_completed(futures):
                 block = futures[fut]
                 audio, marks, seconds = fut.result()  # re-raises SynthesisError
-                cache.put(block.hash, audio, marks)
+                cache.put(block.synth_hash, audio, marks)
                 if on_block:
                     on_block(block.index, False, block.billed_chars, seconds)
         except SynthesisError:
